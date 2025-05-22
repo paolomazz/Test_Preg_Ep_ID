@@ -1,6 +1,6 @@
 from ehrql import create_dataset, codelist_from_csv, minimum_of
 from ehrql.tables.core import patients, clinical_events
-from datetime import date
+from datetime import date, timedelta
 
 # --- 1. Load Subcategorized Codelists ---
 codelist_files = {
@@ -58,32 +58,72 @@ for event_name, codelist in event_types.items():
     setattr(dataset, f"{event_name}_count", events.count_for_patient())
     setattr(dataset, f"{event_name}_flag", events.exists_for_patient())
 
-# --- 4. Key Pregnancy Dates and Intervals ---
-# Earliest antenatal event (across all antenatal types)
-from ehrql import minimum_of
-antenatal_dates = [
-    dataset.antenatal_screening_first_date,
-    dataset.antenatal_risk_first_date,
-    dataset.antenatal_procedures_first_date,
-]
-dataset.earliest_antenatal_date = minimum_of(*antenatal_dates)
+# --- 4. Pregnancy Episode Identification ---
+# Define pregnancy episode window (typical pregnancy duration is ~280 days)
+PREGNANCY_WINDOW = 280  # days
 
-# Earliest pregnancy outcome (live birth or stillbirth)
-dataset.first_live_birth_date = dataset.live_birth_first_date
-dataset.first_stillbirth_date = dataset.stillbirth_first_date
-dataset.pregnancy_outcome_date = minimum_of(dataset.first_live_birth_date, dataset.first_stillbirth_date)
+# Get all antenatal and outcome dates
+antenatal_codes = (
+    codelists["antenatal_screening"] +
+    codelists["antenatal_risk"] +
+    codelists["antenatal_procedures"]
+)
 
-# Time from first antenatal to outcome
-dataset.time_antenatal_to_outcome = (dataset.pregnancy_outcome_date - dataset.earliest_antenatal_date).days
+outcome_codes = (
+    codelists["live_birth"] +
+    codelists["stillbirth"]
+)
 
-# --- 5. Flags for Missing/Inconsistent Data ---
-dataset.has_antenatal = dataset.antenatal_screening_flag | dataset.antenatal_risk_flag | dataset.antenatal_procedures_flag
-dataset.has_outcome = dataset.live_birth_flag | dataset.stillbirth_flag
-dataset.antenatal_no_outcome = dataset.has_antenatal & (~dataset.has_outcome)
-dataset.outcome_no_antenatal = dataset.has_outcome & (~dataset.has_antenatal)
+# Get all events for each type
+antenatal_events = clinical_events.where(
+    clinical_events.snomedct_code.is_in(antenatal_codes)
+)
 
-# --- 6. Export All Event Dates for Post-Processing ---
-# (All *_first_date, *_last_date, and counts are available for export)
+outcome_events = clinical_events.where(
+    clinical_events.snomedct_code.is_in(outcome_codes)
+)
 
-# --- 7. Configure Dummy Data for Testing ---
+# Create episode-level variables for up to 5 episodes per patient
+for episode_num in range(1, 6):
+    # For first episode, use earliest antenatal date
+    if episode_num == 1:
+        episode_start = antenatal_events.date.minimum_for_patient()
+    else:
+        # For subsequent episodes, find first antenatal date after previous episode's end
+        prev_episode_end = getattr(dataset, f"episode_{episode_num-1}_end_date")
+        later_antenatal = antenatal_events.where(
+            antenatal_events.date > prev_episode_end
+        )
+        episode_start = later_antenatal.date.minimum_for_patient()
+    
+    setattr(dataset, f"episode_{episode_num}_start_date", episode_start)
+    
+    # Find first outcome after this episode's start
+    episode_outcomes = outcome_events.where(
+        outcome_events.date > episode_start
+    )
+    setattr(dataset, f"episode_{episode_num}_end_date",
+            episode_outcomes.date.minimum_for_patient())
+    
+    # Track events within this episode
+    episode_start = getattr(dataset, f"episode_{episode_num}_start_date")
+    episode_end = getattr(dataset, f"episode_{episode_num}_end_date")
+    
+    for event_name, codelist in event_types.items():
+        events = clinical_events.where(
+            (clinical_events.snomedct_code.is_in(codelist)) &
+            (clinical_events.date >= episode_start) &
+            (clinical_events.date <= episode_end)
+        )
+        
+        setattr(dataset, f"episode_{episode_num}_{event_name}_count", 
+                events.count_for_patient())
+        setattr(dataset, f"episode_{episode_num}_{event_name}_flag", 
+                events.exists_for_patient())
+        setattr(dataset, f"episode_{episode_num}_{event_name}_first_date", 
+                events.date.minimum_for_patient())
+        setattr(dataset, f"episode_{episode_num}_{event_name}_last_date", 
+                events.date.maximum_for_patient())
+
+# --- 5. Configure Dummy Data for Testing ---
 dataset.configure_dummy_data(population_size=2000)
