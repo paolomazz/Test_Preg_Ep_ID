@@ -2,24 +2,14 @@ from ehrql import create_dataset, codelist_from_csv, minimum_of
 from ehrql.tables.core import patients, clinical_events, medications, practice_registrations
 from datetime import date, timedelta
 
-# --- 1. Load Standard Codelists ---
+# --- 1. Load Pregnancy-Related Codelists ---
 codelist_files = {
-    # Pregnancy-related codelists
+    # Core pregnancy identification codelists
     "antenatal_screening": "codelists/local/A1_antenatal_screening.csv",
     "antenatal_risk": "codelists/local/A2_risk_assessment.csv",
     "antenatal_procedures": "codelists/local/A3_antenatal_procedures.csv",
     "live_birth": "codelists/local/B1_live_birth.csv",
     "stillbirth": "codelists/local/B2_stillbirth.csv",
-    "neonatal_complications": "codelists/local/B3_neonatal_complications.csv",
-    "htn": "codelists/local/C1_hypertension.csv",
-    "diabetes": "codelists/local/C2_diabetes.csv",
-    "infection": "codelists/local/C3_infections.csv",
-    "preeclampsia": "codelists/local/C4_preeclampsia.csv",
-    "other_complications": "codelists/local/C5_other.csv",
-    "maternal_recovery": "codelists/local/D1_maternal_recovery.csv",
-    "neonatal_care": "codelists/local/D2_neonatal_care.csv",
-    "mode_delivery": "codelists/local/E1_mode_of_delivery.csv",
-    "delivery_complications": "codelists/local/E2_delivery_complications.csv",
     
     # Detailed pregnancy outcome codelists
     "incomplete_abortion": "codelists/local/F1_incomplete_abortion.csv",
@@ -35,28 +25,6 @@ codelist_files = {
     "early_miscarriage": "codelists/local/F11_early_miscarriage.csv",
     "late_miscarriage": "codelists/local/F12_late_miscarriage.csv",
     "missed_silent_miscarriage": "codelists/local/F13_missed_silent_miscarriage.csv",
-    "stillbirth": "codelists/local/F14_stillbirth.csv",
-    
-    # Standard condition codelists
-    "cardiovascular": "codelists/opensafely/cardiovascular.csv",
-    "respiratory": "codelists/opensafely/respiratory.csv",
-    "mental_health": "codelists/opensafely/mental-health.csv",
-    "neurological": "codelists/opensafely/neurological.csv",
-    "endocrine": "codelists/opensafely/endocrine.csv",
-    "gastrointestinal": "codelists/opensafely/gastrointestinal.csv",
-    "musculoskeletal": "codelists/opensafely/musculoskeletal.csv",
-    "skin": "codelists/opensafely/skin.csv",
-    "cancer": "codelists/opensafely/cancer.csv",
-    
-    # Standard medication codelists
-    "antihypertensives": "codelists/opensafely/antihypertensives.csv",
-    "antidiabetics": "codelists/opensafely/antidiabetics.csv",
-    "anticoagulants": "codelists/opensafely/anticoagulants.csv",
-    "antidepressants": "codelists/opensafely/antidepressants.csv",
-    "antipsychotics": "codelists/opensafely/antipsychotics.csv",
-    "antiepileptics": "codelists/opensafely/antiepileptics.csv",
-    "steroids": "codelists/opensafely/steroids.csv",
-    "immunosuppressants": "codelists/opensafely/immunosuppressants.csv",
 }
 
 codelists = {k: codelist_from_csv(v, column="code") for k, v in codelist_files.items()}
@@ -198,7 +166,6 @@ for episode_num in range(1, 6):
             setattr(dataset, f"episode_{episode_num}_recurrent_miscarriage", True)
             
         # Impute conception date based on gestational age
-        # First try: Use estimated gestational age if available
         estimated_conception = earliest_outcome_date - timedelta(days=gestational_age + 14)  # Add 2 weeks
         setattr(dataset, f"episode_{episode_num}_estimated_conception_date", estimated_conception)
         setattr(dataset, f"episode_{episode_num}_conception_date_source", "gestational_age")
