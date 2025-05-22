@@ -196,6 +196,13 @@ for episode_num in range(1, 6):
             setattr(dataset, f"episode_{episode_num}_pregnancy_at_risk", True)
         if earliest_outcome_type == "recurrent_miscarriage":
             setattr(dataset, f"episode_{episode_num}_recurrent_miscarriage", True)
+            
+        # Impute conception date based on gestational age
+        # First try: Use estimated gestational age if available
+        estimated_conception = earliest_outcome_date - timedelta(days=gestational_age + 14)  # Add 2 weeks
+        setattr(dataset, f"episode_{episode_num}_estimated_conception_date", estimated_conception)
+        setattr(dataset, f"episode_{episode_num}_conception_date_source", "gestational_age")
+        
     else:
         # If no outcome found, use maximum window
         max_window = max(PREGNANCY_WINDOWS.values())
@@ -206,6 +213,11 @@ for episode_num in range(1, 6):
         setattr(dataset, f"episode_{episode_num}_premature_outcome", False)
         setattr(dataset, f"episode_{episode_num}_pregnancy_at_risk", False)
         setattr(dataset, f"episode_{episode_num}_recurrent_miscarriage", False)
+        
+        # Impute conception date based on maximum window
+        estimated_conception = episode_start - timedelta(days=14)  # Subtract 2 weeks from start date
+        setattr(dataset, f"episode_{episode_num}_estimated_conception_date", estimated_conception)
+        setattr(dataset, f"episode_{episode_num}_conception_date_source", "episode_start")
 
 # --- 6. Add Clinical History and Medications to Each Episode ---
 for episode_num in range(1, 6):
