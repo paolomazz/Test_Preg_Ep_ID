@@ -21,6 +21,22 @@ codelist_files = {
     "mode_delivery": "codelists/local/E1_mode_of_delivery.csv",
     "delivery_complications": "codelists/local/E2_delivery_complications.csv",
     
+    # Detailed pregnancy outcome codelists
+    "incomplete_abortion": "codelists/local/F1_incomplete_abortion.csv",
+    "threatened_abortion": "codelists/local/F2_threatened_abortion.csv",
+    "complete_miscarriage": "codelists/local/F3_complete_miscarriage.csv",
+    "blighted_ovum": "codelists/local/F4_blighted_ovum.csv",
+    "chemical_pregnancy": "codelists/local/F5_chemical_pregnancy.csv",
+    "missed_miscarriage": "codelists/local/F6_missed_miscarriage.csv",
+    "inevitable_miscarriage": "codelists/local/F7_inevitable_miscarriage.csv",
+    "recurrent_miscarriage": "codelists/local/F8_recurrent_miscarriage.csv",
+    "ectopic_pregnancy": "codelists/local/F9_ectopic_pregnancy.csv",
+    "molar_pregnancy": "codelists/local/F10_molar_pregnancy.csv",
+    "early_miscarriage": "codelists/local/F11_early_miscarriage.csv",
+    "late_miscarriage": "codelists/local/F12_late_miscarriage.csv",
+    "missed_silent_miscarriage": "codelists/local/F13_missed_silent_miscarriage.csv",
+    "stillbirth": "codelists/local/F14_stillbirth.csv",
+    
     # Standard condition codelists
     "cardiovascular": "codelists/opensafely/cardiovascular.csv",
     "respiratory": "codelists/opensafely/respiratory.csv",
@@ -71,8 +87,31 @@ LOOKBACK_PERIODS = {
 }
 
 # --- 5. Pregnancy Episode Identification ---
-# Define pregnancy episode window (typical pregnancy duration is ~280 days)
-PREGNANCY_WINDOW = 280  # days
+# Define pregnancy outcome windows with specific gestational age ranges
+PREGNANCY_WINDOWS = {
+    # Live births
+    "term_birth": 280,  # 40 weeks
+    "preterm_birth": 259,  # 37 weeks
+    "very_preterm_birth": 224,  # 32 weeks
+    
+    # Miscarriages and abortions
+    "chemical_pregnancy": 42,  # 6 weeks
+    "early_miscarriage": 84,  # 12 weeks
+    "blighted_ovum": 84,  # 12 weeks
+    "incomplete_abortion": 84,  # 12 weeks
+    "threatened_abortion": 84,  # 12 weeks
+    "complete_miscarriage": 84,  # 12 weeks
+    "missed_miscarriage": 84,  # 12 weeks
+    "inevitable_miscarriage": 84,  # 12 weeks
+    "missed_silent_miscarriage": 84,  # 12 weeks
+    "late_miscarriage": 196,  # 28 weeks
+    
+    # Special cases
+    "ectopic_pregnancy": 84,  # 12 weeks
+    "molar_pregnancy": 84,  # 12 weeks
+    "recurrent_miscarriage": 84,  # 12 weeks
+    "stillbirth": 280,  # 40 weeks
+}
 
 # Get all antenatal and outcome dates
 antenatal_codes = (
@@ -81,18 +120,27 @@ antenatal_codes = (
     codelists["antenatal_procedures"]
 )
 
-outcome_codes = (
-    codelists["live_birth"] +
-    codelists["stillbirth"]
-)
+outcome_codes = {
+    "live_birth": codelists["live_birth"],
+    "stillbirth": codelists["stillbirth"],
+    "incomplete_abortion": codelists["incomplete_abortion"],
+    "threatened_abortion": codelists["threatened_abortion"],
+    "complete_miscarriage": codelists["complete_miscarriage"],
+    "blighted_ovum": codelists["blighted_ovum"],
+    "chemical_pregnancy": codelists["chemical_pregnancy"],
+    "missed_miscarriage": codelists["missed_miscarriage"],
+    "inevitable_miscarriage": codelists["inevitable_miscarriage"],
+    "recurrent_miscarriage": codelists["recurrent_miscarriage"],
+    "ectopic_pregnancy": codelists["ectopic_pregnancy"],
+    "molar_pregnancy": codelists["molar_pregnancy"],
+    "early_miscarriage": codelists["early_miscarriage"],
+    "late_miscarriage": codelists["late_miscarriage"],
+    "missed_silent_miscarriage": codelists["missed_silent_miscarriage"]
+}
 
 # Get all events for each type
 antenatal_events = clinical_events.where(
     clinical_events.snomedct_code.is_in(antenatal_codes)
-)
-
-outcome_events = clinical_events.where(
-    clinical_events.snomedct_code.is_in(outcome_codes)
 )
 
 # Create episode-level variables for up to 5 episodes per patient
@@ -111,31 +159,53 @@ for episode_num in range(1, 6):
     setattr(dataset, f"episode_{episode_num}_start_date", episode_start)
     
     # Find first outcome after this episode's start
-    episode_outcomes = outcome_events.where(
-        outcome_events.date > episode_start
-    )
-    setattr(dataset, f"episode_{episode_num}_end_date",
-            episode_outcomes.date.minimum_for_patient())
-    
-    # Track events within this episode
-    episode_start = getattr(dataset, f"episode_{episode_num}_start_date")
-    episode_end = getattr(dataset, f"episode_{episode_num}_end_date")
-    
-    for event_name, codelist in event_types.items():
-        events = clinical_events.where(
-            (clinical_events.snomedct_code.is_in(codelist)) &
-            (clinical_events.date >= episode_start) &
-            (clinical_events.date <= episode_end)
+    episode_outcomes = {}
+    for outcome_type, outcome_codelist in outcome_codes.items():
+        outcomes = clinical_events.where(
+            (clinical_events.snomedct_code.is_in(outcome_codelist)) &
+            (clinical_events.date > episode_start)
         )
+        episode_outcomes[outcome_type] = outcomes.date.minimum_for_patient()
+    
+    # Determine the earliest outcome and its type
+    earliest_outcome_date = None
+    earliest_outcome_type = None
+    
+    for outcome_type, outcome_date in episode_outcomes.items():
+        if outcome_date is not None:
+            if earliest_outcome_date is None or outcome_date < earliest_outcome_date:
+                earliest_outcome_date = outcome_date
+                earliest_outcome_type = outcome_type
+    
+    # Set episode end date and type
+    if earliest_outcome_date is not None:
+        setattr(dataset, f"episode_{episode_num}_end_date", earliest_outcome_date)
+        setattr(dataset, f"episode_{episode_num}_outcome_type", earliest_outcome_type)
         
-        setattr(dataset, f"episode_{episode_num}_{event_name}_count", 
-                events.count_for_patient())
-        setattr(dataset, f"episode_{episode_num}_{event_name}_flag", 
-                events.exists_for_patient())
-        setattr(dataset, f"episode_{episode_num}_{event_name}_first_date", 
-                events.date.minimum_for_patient())
-        setattr(dataset, f"episode_{episode_num}_{event_name}_last_date", 
-                events.date.maximum_for_patient())
+        # Calculate gestational age at outcome
+        gestational_age = (earliest_outcome_date - episode_start).days
+        setattr(dataset, f"episode_{episode_num}_gestational_age", gestational_age)
+        
+        # Flag if outcome occurred before expected window
+        expected_window = PREGNANCY_WINDOWS.get(earliest_outcome_type, 280)
+        setattr(dataset, f"episode_{episode_num}_premature_outcome", 
+                gestational_age < expected_window)
+        
+        # Add specific flags for certain outcomes
+        if earliest_outcome_type in ["threatened_abortion", "inevitable_miscarriage"]:
+            setattr(dataset, f"episode_{episode_num}_pregnancy_at_risk", True)
+        if earliest_outcome_type == "recurrent_miscarriage":
+            setattr(dataset, f"episode_{episode_num}_recurrent_miscarriage", True)
+    else:
+        # If no outcome found, use maximum window
+        max_window = max(PREGNANCY_WINDOWS.values())
+        setattr(dataset, f"episode_{episode_num}_end_date", 
+                episode_start + timedelta(days=max_window))
+        setattr(dataset, f"episode_{episode_num}_outcome_type", "unknown")
+        setattr(dataset, f"episode_{episode_num}_gestational_age", max_window)
+        setattr(dataset, f"episode_{episode_num}_premature_outcome", False)
+        setattr(dataset, f"episode_{episode_num}_pregnancy_at_risk", False)
+        setattr(dataset, f"episode_{episode_num}_recurrent_miscarriage", False)
 
 # --- 6. Add Clinical History and Medications to Each Episode ---
 for episode_num in range(1, 6):
