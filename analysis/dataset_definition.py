@@ -1,9 +1,10 @@
 from ehrql import create_dataset, codelist_from_csv, minimum_of
-from ehrql.tables.core import patients, clinical_events
+from ehrql.tables.core import patients, clinical_events, medications, practice_registrations
 from datetime import date, timedelta
 
-# --- 1. Load Subcategorized Codelists ---
+# --- 1. Load Standard Codelists ---
 codelist_files = {
+    # Pregnancy-related codelists
     "antenatal_screening": "codelists/local/A1_antenatal_screening.csv",
     "antenatal_risk": "codelists/local/A2_risk_assessment.csv",
     "antenatal_procedures": "codelists/local/A3_antenatal_procedures.csv",
@@ -19,8 +20,29 @@ codelist_files = {
     "neonatal_care": "codelists/local/D2_neonatal_care.csv",
     "mode_delivery": "codelists/local/E1_mode_of_delivery.csv",
     "delivery_complications": "codelists/local/E2_delivery_complications.csv",
-    # Add more as needed
+    
+    # Standard condition codelists
+    "cardiovascular": "codelists/opensafely/cardiovascular.csv",
+    "respiratory": "codelists/opensafely/respiratory.csv",
+    "mental_health": "codelists/opensafely/mental-health.csv",
+    "neurological": "codelists/opensafely/neurological.csv",
+    "endocrine": "codelists/opensafely/endocrine.csv",
+    "gastrointestinal": "codelists/opensafely/gastrointestinal.csv",
+    "musculoskeletal": "codelists/opensafely/musculoskeletal.csv",
+    "skin": "codelists/opensafely/skin.csv",
+    "cancer": "codelists/opensafely/cancer.csv",
+    
+    # Standard medication codelists
+    "antihypertensives": "codelists/opensafely/antihypertensives.csv",
+    "antidiabetics": "codelists/opensafely/antidiabetics.csv",
+    "anticoagulants": "codelists/opensafely/anticoagulants.csv",
+    "antidepressants": "codelists/opensafely/antidepressants.csv",
+    "antipsychotics": "codelists/opensafely/antipsychotics.csv",
+    "antiepileptics": "codelists/opensafely/antiepileptics.csv",
+    "steroids": "codelists/opensafely/steroids.csv",
+    "immunosuppressants": "codelists/opensafely/immunosuppressants.csv",
 }
+
 codelists = {k: codelist_from_csv(v, column="code") for k, v in codelist_files.items()}
 
 # --- 2. Create Dataset and Define Population ---
@@ -30,35 +52,25 @@ dataset.age = age
 dataset.sex = patients.sex
 dataset.define_population((age >= 14) & (age < 50) & (patients.sex == "female"))
 
-# --- 3. Extract and Summarize Events ---
-event_types = {
-    "antenatal_screening": codelists["antenatal_screening"],
-    "antenatal_risk": codelists["antenatal_risk"],
-    "antenatal_procedures": codelists["antenatal_procedures"],
-    "live_birth": codelists["live_birth"],
-    "stillbirth": codelists["stillbirth"],
-    "neonatal_complications": codelists["neonatal_complications"],
-    "htn": codelists["htn"],
-    "diabetes": codelists["diabetes"],
-    "infection": codelists["infection"],
-    "preeclampsia": codelists["preeclampsia"],
-    "other_complications": codelists["other_complications"],
-    "maternal_recovery": codelists["maternal_recovery"],
-    "neonatal_care": codelists["neonatal_care"],
-    "mode_delivery": codelists["mode_delivery"],
-    "delivery_complications": codelists["delivery_complications"],
-    # Add more as needed
+# --- 3. Extract Sociodemographic Information ---
+# Basic demographics (these are point-in-time values)
+dataset.ethnicity = patients.ethnicity
+dataset.imd_quintile = patients.imd_quintile
+dataset.rural_urban = patients.rural_urban_classification
+
+# Practice information
+dataset.practice_region = practice_registrations.region
+dataset.practice_urban_rural = practice_registrations.urban_rural_classification
+
+# --- 4. Define Time Windows for Conditions and Medications ---
+# Define lookback periods for pre-existing conditions
+LOOKBACK_PERIODS = {
+    "short_term": 90,  # 3 months
+    "medium_term": 365,  # 1 year
+    "long_term": 730,  # 2 years
 }
 
-# For each event type, extract first/last date, count, and flag
-for event_name, codelist in event_types.items():
-    events = clinical_events.where(clinical_events.snomedct_code.is_in(codelist))
-    setattr(dataset, f"{event_name}_first_date", events.date.minimum_for_patient())
-    setattr(dataset, f"{event_name}_last_date", events.date.maximum_for_patient())
-    setattr(dataset, f"{event_name}_count", events.count_for_patient())
-    setattr(dataset, f"{event_name}_flag", events.exists_for_patient())
-
-# --- 4. Pregnancy Episode Identification ---
+# --- 5. Pregnancy Episode Identification ---
 # Define pregnancy episode window (typical pregnancy duration is ~280 days)
 PREGNANCY_WINDOW = 280  # days
 
@@ -125,5 +137,81 @@ for episode_num in range(1, 6):
         setattr(dataset, f"episode_{episode_num}_{event_name}_last_date", 
                 events.date.maximum_for_patient())
 
-# --- 5. Configure Dummy Data for Testing ---
+# --- 6. Add Clinical History and Medications to Each Episode ---
+for episode_num in range(1, 6):
+    episode_start = getattr(dataset, f"episode_{episode_num}_start_date")
+    episode_end = getattr(dataset, f"episode_{episode_num}_end_date")
+    
+    # For each lookback period
+    for period_name, days in LOOKBACK_PERIODS.items():
+        lookback_start = episode_start - timedelta(days=days)
+        
+        # Track conditions in lookback period
+        for condition_name, codelist in codelists.items():
+            if condition_name in ["cardiovascular", "respiratory", "mental_health", 
+                                "neurological", "endocrine", "gastrointestinal", 
+                                "musculoskeletal", "skin", "cancer"]:
+                # Pre-existing conditions in lookback period
+                conditions = clinical_events.where(
+                    (clinical_events.snomedct_code.is_in(codelist)) &
+                    (clinical_events.date >= lookback_start) &
+                    (clinical_events.date < episode_start)
+                )
+                setattr(dataset, f"episode_{episode_num}_{period_name}_{condition_name}_count",
+                        conditions.count_for_patient())
+                setattr(dataset, f"episode_{episode_num}_{period_name}_{condition_name}_list",
+                        conditions.snomedct_code)
+                
+                # Current conditions during episode
+                current_conditions = clinical_events.where(
+                    (clinical_events.snomedct_code.is_in(codelist)) &
+                    (clinical_events.date >= episode_start) &
+                    (clinical_events.date <= episode_end)
+                )
+                setattr(dataset, f"episode_{episode_num}_current_{condition_name}_count",
+                        current_conditions.count_for_patient())
+                setattr(dataset, f"episode_{episode_num}_current_{condition_name}_list",
+                        current_conditions.snomedct_code)
+    
+    # Track medications during episode
+    for med_name, codelist in codelists.items():
+        if med_name in ["antihypertensives", "antidiabetics", "anticoagulants", 
+                       "antidepressants", "antipsychotics", "antiepileptics", 
+                       "steroids", "immunosuppressants"]:
+            # Medications during episode
+            episode_meds = medications.where(
+                (medications.dmd_code.is_in(codelist)) &
+                (medications.date >= episode_start) &
+                (medications.date <= episode_end)
+            )
+            setattr(dataset, f"episode_{episode_num}_{med_name}_count",
+                    episode_meds.count_for_patient())
+            setattr(dataset, f"episode_{episode_num}_{med_name}_list",
+                    episode_meds.dmd_code)
+            setattr(dataset, f"episode_{episode_num}_{med_name}_dates",
+                    episode_meds.date)
+            setattr(dataset, f"episode_{episode_num}_{med_name}_doses",
+                    episode_meds.quantity)
+            setattr(dataset, f"episode_{episode_num}_{med_name}_units",
+                    episode_meds.unit)
+            
+            # Check for medication combinations
+            for other_med_name, other_codelist in codelists.items():
+                if other_med_name in ["antihypertensives", "antidiabetics", "anticoagulants", 
+                                    "antidepressants", "antipsychotics", "antiepileptics", 
+                                    "steroids", "immunosuppressants"] and other_med_name != med_name:
+                    other_meds = medications.where(
+                        (medications.dmd_code.is_in(other_codelist)) &
+                        (medications.date >= episode_start) &
+                        (medications.date <= episode_end)
+                    )
+                    # Check for overlapping dates
+                    combination_flag = (
+                        episode_meds.date.minimum_for_patient() <= other_meds.date.maximum_for_patient() &
+                        episode_meds.date.maximum_for_patient() >= other_meds.date.minimum_for_patient()
+                    )
+                    setattr(dataset, f"episode_{episode_num}_{med_name}_with_{other_med_name}",
+                            combination_flag)
+
+# --- 7. Configure Dummy Data for Testing ---
 dataset.configure_dummy_data(population_size=2000)
