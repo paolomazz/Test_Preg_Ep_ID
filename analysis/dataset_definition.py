@@ -89,59 +89,59 @@ PREGNANCY_WINDOWS = {
     "early_miscarriage": 84,  # 12 weeks
     "blighted_ovum": 84,  # 12 weeks
     "incomplete_abortion": 84,  # 12 weeks
-    "threatened_abortion": "codelists/local/F2_threatened_abortion.csv",
-    "complete_miscarriage": "codelists/local/F3_complete_miscarriage.csv",
-    "blighted_ovum": "codelists/local/F4_blighted_ovum.csv",
-    "chemical_pregnancy": "codelists/local/F5_chemical_pregnancy.csv",
-    "missed_miscarriage": "codelists/local/F6_missed_miscarriage.csv",
-    "inevitable_miscarriage": "codelists/local/F7_inevitable_miscarriage.csv",
-    "recurrent_miscarriage": "codelists/local/F8_recurrent_miscarriage.csv",
-    "ectopic_pregnancy": "codelists/local/F9_ectopic_pregnancy.csv",
-    "molar_pregnancy": "codelists/local/F10_molar_pregnancy.csv",
-    "early_miscarriage": "codelists/local/F11_early_miscarriage.csv",
-    "late_miscarriage": "codelists/local/F12_late_miscarriage.csv",
-    "missed_silent_miscarriage": "codelists/local/F13_missed_silent_miscarriage.csv",
+    "threatened_abortion": 84,  # 12 weeks
+    "complete_miscarriage": 84,  # 12 weeks
+    "missed_miscarriage": 84,  # 12 weeks
+    "inevitable_miscarriage": 84,  # 12 weeks
+    "recurrent_miscarriage": 84,  # 12 weeks
+    "ectopic_pregnancy": 84,  # 12 weeks
+    "molar_pregnancy": 84,  # 12 weeks
+    "late_miscarriage": 196,  # 28 weeks
+    "missed_silent_miscarriage": 196,  # 28 weeks
 }
 
-# Define time windows for event attribution
+# Define time windows for event attribution with clinical rationale
 EVENT_WINDOWS = {
-    "post_outcome_window": 84,  # Days after outcome to include events
+    "post_outcome_window": 84,  # Days after outcome to include events (12 weeks)
     "future_pregnancy_buffer": 180,  # 6 months buffer for future pregnancy
     "antenatal_buffer": 21,  # 21 days buffer for antenatal events
+    "min_episode_gap": 90,  # Minimum gap between episodes (3 months)
+    "max_episode_gap": 730,  # Maximum gap between episodes (2 years)
+    "data_quality_window": 30,  # Window for checking data quality
 }
 
-# Define weights for different types of pregnancy indicators
+# Define weights for different types of pregnancy indicators with clinical rationale
 PREGNANCY_INDICATOR_WEIGHTS = {
     # High confidence indicators (weight = 1.0)
-    "antenatal_screening": 1.0,
-    "antenatal_risk": 1.0,
-    "antenatal_procedures": 1.0,
+    "antenatal_screening": 1.0,  # Routine screening is highly reliable
+    "antenatal_risk": 1.0,  # Risk assessment is standard practice
+    "antenatal_procedures": 1.0,  # Procedures are well-documented
     
     # Moderate confidence indicators (weight = 0.8)
-    "gestational_diabetes": 0.8,
-    "preeclampsia": 0.8,
-    "hyperemesis": 0.8,
-    "pregnancy_hypertension": 0.8,
+    "gestational_diabetes": 0.8,  # Common condition with clear diagnosis
+    "preeclampsia": 0.8,  # Serious condition with clear diagnosis
+    "hyperemesis": 0.8,  # Distinctive condition
+    "pregnancy_hypertension": 0.8,  # Common condition with clear diagnosis
     
     # Lower confidence indicators (weight = 0.6)
-    "pregnancy_infection": 0.6,
-    "pregnancy_bleeding": 0.6,
-    "pregnancy_anemia": 0.6,
-    "pregnancy_thrombosis": 0.6,
-    "pregnancy_mental_health": 0.6,
-    "pregnancy_thyroid": 0.6,
-    "pregnancy_asthma": 0.6,
-    "pregnancy_epilepsy": 0.6,
-    "pregnancy_heart_disease": 0.6,
-    "pregnancy_kidney_disease": 0.6,
-    "pregnancy_liver_disease": 0.6,
-    "pregnancy_autoimmune": 0.6,
+    "pregnancy_infection": 0.6,  # Can occur outside pregnancy
+    "pregnancy_bleeding": 0.6,  # Can occur outside pregnancy
+    "pregnancy_anemia": 0.6,  # Common in general population
+    "pregnancy_thrombosis": 0.6,  # Can occur outside pregnancy
+    "pregnancy_mental_health": 0.6,  # Can occur outside pregnancy
+    "pregnancy_thyroid": 0.6,  # Can occur outside pregnancy
+    "pregnancy_asthma": 0.6,  # Can occur outside pregnancy
+    "pregnancy_epilepsy": 0.6,  # Can occur outside pregnancy
+    "pregnancy_heart_disease": 0.6,  # Can occur outside pregnancy
+    "pregnancy_kidney_disease": 0.6,  # Can occur outside pregnancy
+    "pregnancy_liver_disease": 0.6,  # Can occur outside pregnancy
+    "pregnancy_autoimmune": 0.6,  # Can occur outside pregnancy
     
     # Lifestyle indicators (weight = 0.4)
-    "pregnancy_obesity": 0.4,
-    "pregnancy_smoking": 0.4,
-    "pregnancy_alcohol": 0.4,
-    "pregnancy_drug_use": 0.4
+    "pregnancy_obesity": 0.4,  # Can be recorded outside pregnancy context
+    "pregnancy_smoking": 0.4,  # Can be recorded outside pregnancy context
+    "pregnancy_alcohol": 0.4,  # Can be recorded outside pregnancy context
+    "pregnancy_drug_use": 0.4  # Can be recorded outside pregnancy context
 }
 
 # Get all potential pregnancy indicator events
@@ -190,13 +190,23 @@ for episode_num in range(1, 6):
         antenatal_start = antenatal_events.date.minimum_for_patient()
         condition_start = pregnancy_condition_events.date.minimum_for_patient()
         
-        # Determine which source to use based on weights
+        # Determine which source to use based on weights and clinical plausibility
         if antenatal_start is not None and condition_start is not None:
             antenatal_weight = PREGNANCY_INDICATOR_WEIGHTS["antenatal_screening"]
             condition_weight = PREGNANCY_INDICATOR_WEIGHTS["gestational_diabetes"]
-            episode_start = antenatal_start if antenatal_weight >= condition_weight else condition_start
-            setattr(dataset, f"episode_{episode_num}_identification_source", 
-                   "antenatal" if antenatal_weight >= condition_weight else "condition")
+            
+            # Check for clinical plausibility
+            days_difference = (condition_start - antenatal_start).days
+            if abs(days_difference) <= EVENT_WINDOWS["data_quality_window"]:
+                # If dates are close, use the earlier one
+                episode_start = min(antenatal_start, condition_start)
+                setattr(dataset, f"episode_{episode_num}_identification_source", 
+                       "antenatal" if antenatal_start <= condition_start else "condition")
+            else:
+                # If dates are far apart, use the one with higher weight
+                episode_start = antenatal_start if antenatal_weight >= condition_weight else condition_start
+                setattr(dataset, f"episode_{episode_num}_identification_source", 
+                       "antenatal" if antenatal_weight >= condition_weight else "condition")
         else:
             episode_start = antenatal_start if antenatal_start is not None else condition_start
             setattr(dataset, f"episode_{episode_num}_identification_source", 
@@ -204,22 +214,38 @@ for episode_num in range(1, 6):
     else:
         # For subsequent episodes, find first event after previous episode's end
         prev_episode_end = getattr(dataset, f"episode_{episode_num-1}_end_date")
+        
+        # Check for minimum gap between episodes
+        min_gap_date = prev_episode_end + timedelta(days=EVENT_WINDOWS["min_episode_gap"])
+        
+        # Get events after minimum gap
         later_antenatal = antenatal_events.where(
-            antenatal_events.date > prev_episode_end
+            antenatal_events.date > min_gap_date
         )
         later_condition = pregnancy_condition_events.where(
-            pregnancy_condition_events.date > prev_episode_end
+            pregnancy_condition_events.date > min_gap_date
         )
+        
         antenatal_start = later_antenatal.date.minimum_for_patient()
         condition_start = later_condition.date.minimum_for_patient()
         
-        # Determine which source to use based on weights
+        # Determine which source to use based on weights and clinical plausibility
         if antenatal_start is not None and condition_start is not None:
             antenatal_weight = PREGNANCY_INDICATOR_WEIGHTS["antenatal_screening"]
             condition_weight = PREGNANCY_INDICATOR_WEIGHTS["gestational_diabetes"]
-            episode_start = antenatal_start if antenatal_weight >= condition_weight else condition_start
-            setattr(dataset, f"episode_{episode_num}_identification_source", 
-                   "antenatal" if antenatal_weight >= condition_weight else "condition")
+            
+            # Check for clinical plausibility
+            days_difference = (condition_start - antenatal_start).days
+            if abs(days_difference) <= EVENT_WINDOWS["data_quality_window"]:
+                # If dates are close, use the earlier one
+                episode_start = min(antenatal_start, condition_start)
+                setattr(dataset, f"episode_{episode_num}_identification_source", 
+                       "antenatal" if antenatal_start <= condition_start else "condition")
+            else:
+                # If dates are far apart, use the one with higher weight
+                episode_start = antenatal_start if antenatal_weight >= condition_weight else condition_start
+                setattr(dataset, f"episode_{episode_num}_identification_source", 
+                       "antenatal" if antenatal_weight >= condition_weight else "condition")
         else:
             episode_start = antenatal_start if antenatal_start is not None else condition_start
             setattr(dataset, f"episode_{episode_num}_identification_source", 
