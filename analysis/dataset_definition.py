@@ -89,18 +89,25 @@ PREGNANCY_WINDOWS = {
     "early_miscarriage": 84,  # 12 weeks
     "blighted_ovum": 84,  # 12 weeks
     "incomplete_abortion": 84,  # 12 weeks
-    "threatened_abortion": 84,  # 12 weeks
-    "complete_miscarriage": 84,  # 12 weeks
-    "missed_miscarriage": 84,  # 12 weeks
-    "inevitable_miscarriage": 84,  # 12 weeks
-    "missed_silent_miscarriage": 84,  # 12 weeks
-    "late_miscarriage": 196,  # 28 weeks
-    
-    # Special cases
-    "ectopic_pregnancy": 84,  # 12 weeks
-    "molar_pregnancy": 84,  # 12 weeks
-    "recurrent_miscarriage": 84,  # 12 weeks
-    "stillbirth": 280,  # 40 weeks
+    "threatened_abortion": "codelists/local/F2_threatened_abortion.csv",
+    "complete_miscarriage": "codelists/local/F3_complete_miscarriage.csv",
+    "blighted_ovum": "codelists/local/F4_blighted_ovum.csv",
+    "chemical_pregnancy": "codelists/local/F5_chemical_pregnancy.csv",
+    "missed_miscarriage": "codelists/local/F6_missed_miscarriage.csv",
+    "inevitable_miscarriage": "codelists/local/F7_inevitable_miscarriage.csv",
+    "recurrent_miscarriage": "codelists/local/F8_recurrent_miscarriage.csv",
+    "ectopic_pregnancy": "codelists/local/F9_ectopic_pregnancy.csv",
+    "molar_pregnancy": "codelists/local/F10_molar_pregnancy.csv",
+    "early_miscarriage": "codelists/local/F11_early_miscarriage.csv",
+    "late_miscarriage": "codelists/local/F12_late_miscarriage.csv",
+    "missed_silent_miscarriage": "codelists/local/F13_missed_silent_miscarriage.csv",
+}
+
+# Define time windows for event attribution
+EVENT_WINDOWS = {
+    "post_outcome_window": 84,  # Days after outcome to include events
+    "future_pregnancy_buffer": 180,  # 6 months buffer for future pregnancy
+    "antenatal_buffer": 21,  # 21 days buffer for antenatal events
 }
 
 # Define weights for different types of pregnancy indicators
@@ -185,14 +192,12 @@ for episode_num in range(1, 6):
         
         # Determine which source to use based on weights
         if antenatal_start is not None and condition_start is not None:
-            # If both exist, use the one with higher weight
             antenatal_weight = PREGNANCY_INDICATOR_WEIGHTS["antenatal_screening"]
-            condition_weight = PREGNANCY_INDICATOR_WEIGHTS["gestational_diabetes"]  # Default to moderate weight
+            condition_weight = PREGNANCY_INDICATOR_WEIGHTS["gestational_diabetes"]
             episode_start = antenatal_start if antenatal_weight >= condition_weight else condition_start
             setattr(dataset, f"episode_{episode_num}_identification_source", 
                    "antenatal" if antenatal_weight >= condition_weight else "condition")
         else:
-            # If only one exists, use that
             episode_start = antenatal_start if antenatal_start is not None else condition_start
             setattr(dataset, f"episode_{episode_num}_identification_source", 
                    "antenatal" if antenatal_start is not None else "condition")
@@ -221,21 +226,6 @@ for episode_num in range(1, 6):
                    "antenatal" if antenatal_start is not None else "condition")
     
     setattr(dataset, f"episode_{episode_num}_start_date", episode_start)
-    
-    # Track which conditions were present during this episode
-    for condition_name in PREGNANCY_INDICATOR_WEIGHTS.keys():
-        if condition_name in codelists:
-            condition_events = clinical_events.where(
-                (clinical_events.snomedct_code.is_in(codelists[condition_name])) &
-                (clinical_events.date >= episode_start) &
-                (clinical_events.date <= getattr(dataset, f"episode_{episode_num}_end_date"))
-            )
-            setattr(dataset, f"episode_{episode_num}_{condition_name}_present", 
-                   condition_events.count_for_patient() > 0)
-            setattr(dataset, f"episode_{episode_num}_{condition_name}_count", 
-                   condition_events.count_for_patient())
-            setattr(dataset, f"episode_{episode_num}_{condition_name}_first_date", 
-                   condition_events.date.minimum_for_patient())
     
     # Find first outcome after this episode's start
     episode_outcomes = {}
@@ -277,9 +267,158 @@ for episode_num in range(1, 6):
             setattr(dataset, f"episode_{episode_num}_recurrent_miscarriage", True)
             
         # Impute conception date based on gestational age
-        estimated_conception = earliest_outcome_date - timedelta(days=gestational_age + 14)  # Add 2 weeks
+        estimated_conception = earliest_outcome_date - timedelta(days=gestational_age + 14)
         setattr(dataset, f"episode_{episode_num}_estimated_conception_date", estimated_conception)
         setattr(dataset, f"episode_{episode_num}_conception_date_source", "gestational_age")
+        
+        # Track events within the episode window
+        episode_end = earliest_outcome_date + timedelta(days=EVENT_WINDOWS["post_outcome_window"])
+        
+        # Get next episode start date if it exists
+        next_episode_start = None
+        if episode_num < 5:
+            next_episode_start = getattr(dataset, f"episode_{episode_num+1}_start_date")
+        
+        # Track which conditions were present during this episode
+        for condition_name in PREGNANCY_INDICATOR_WEIGHTS.keys():
+            if condition_name in codelists:
+                # Get all events for this condition
+                condition_events = clinical_events.where(
+                    (clinical_events.snomedct_code.is_in(codelists[condition_name])) &
+                    (clinical_events.date >= episode_start) &
+                    (clinical_events.date <= episode_end)
+                )
+                
+                # Track events that might need reattribution
+                reattributed_events = None
+                if next_episode_start is not None:
+                    # For antenatal events, check if they're within 21 days of next episode
+                    if condition_name in ["antenatal_screening", "antenatal_risk", "antenatal_procedures"]:
+                        reattributed_events = condition_events.where(
+                            (condition_events.date >= next_episode_start - timedelta(days=EVENT_WINDOWS["antenatal_buffer"])) &
+                            (condition_events.date <= next_episode_start + timedelta(days=EVENT_WINDOWS["antenatal_buffer"]))
+                        )
+                        condition_events = condition_events.where(
+                            (condition_events.date < next_episode_start - timedelta(days=EVENT_WINDOWS["antenatal_buffer"])) |
+                            (condition_events.date > next_episode_start + timedelta(days=EVENT_WINDOWS["antenatal_buffer"]))
+                        )
+                    # For other events, check if they're within 6-12 months of next episode
+                    else:
+                        reattributed_events = condition_events.where(
+                            (condition_events.date >= next_episode_start - timedelta(days=EVENT_WINDOWS["future_pregnancy_buffer"])) &
+                            (condition_events.date <= next_episode_start + timedelta(days=EVENT_WINDOWS["future_pregnancy_buffer"]))
+                        )
+                        condition_events = condition_events.where(
+                            (condition_events.date < next_episode_start - timedelta(days=EVENT_WINDOWS["future_pregnancy_buffer"])) |
+                            (condition_events.date > next_episode_start + timedelta(days=EVENT_WINDOWS["future_pregnancy_buffer"]))
+                        )
+                
+                # Basic event tracking
+                setattr(dataset, f"episode_{episode_num}_{condition_name}_present", 
+                       condition_events.count_for_patient() > 0)
+                setattr(dataset, f"episode_{episode_num}_{condition_name}_count", 
+                       condition_events.count_for_patient())
+                
+                # Detailed timing tracking
+                if condition_events.count_for_patient() > 0:
+                    # First and last dates
+                    first_date = condition_events.date.minimum_for_patient()
+                    last_date = condition_events.date.maximum_for_patient()
+                    setattr(dataset, f"episode_{episode_num}_{condition_name}_first_date", first_date)
+                    setattr(dataset, f"episode_{episode_num}_{condition_name}_last_date", last_date)
+                    
+                    # Timing relative to outcome
+                    days_before_outcome = (earliest_outcome_date - first_date).days
+                    days_after_outcome = (last_date - earliest_outcome_date).days
+                    setattr(dataset, f"episode_{episode_num}_{condition_name}_days_before_outcome", days_before_outcome)
+                    setattr(dataset, f"episode_{episode_num}_{condition_name}_days_after_outcome", days_after_outcome)
+                    
+                    # Timing relative to episode start
+                    days_after_start = (first_date - episode_start).days
+                    setattr(dataset, f"episode_{episode_num}_{condition_name}_days_after_start", days_after_start)
+                    
+                    # Event frequency
+                    total_days = (last_date - first_date).days
+                    if total_days > 0:
+                        frequency = condition_events.count_for_patient() / total_days
+                        setattr(dataset, f"episode_{episode_num}_{condition_name}_frequency", frequency)
+                
+                # Reattribution tracking
+                if reattributed_events is not None and reattributed_events.count_for_patient() > 0:
+                    setattr(dataset, f"episode_{episode_num}_{condition_name}_reattributed_count", 
+                           reattributed_events.count_for_patient())
+                    setattr(dataset, f"episode_{episode_num}_{condition_name}_reattributed_dates", 
+                           reattributed_events.date)
+                    setattr(dataset, f"episode_{episode_num}_{condition_name}_reattributed_codes", 
+                           reattributed_events.snomedct_code)
+                    
+                    # Timing of reattributed events
+                    reattributed_first = reattributed_events.date.minimum_for_patient()
+                    reattributed_last = reattributed_events.date.maximum_for_patient()
+                    setattr(dataset, f"episode_{episode_num}_{condition_name}_reattributed_first_date", 
+                           reattributed_first)
+                    setattr(dataset, f"episode_{episode_num}_{condition_name}_reattributed_last_date", 
+                           reattributed_last)
+                    
+                    # Days between reattributed events and next episode
+                    if next_episode_start is not None:
+                        days_before_next = (next_episode_start - reattributed_last).days
+                        setattr(dataset, f"episode_{episode_num}_{condition_name}_days_before_next_episode", 
+                               days_before_next)
+                        
+                        # Validation checks for reattribution
+                        # 1. Check if reattributed events are closer to next episode than current episode
+                        days_from_current_outcome = (reattributed_first - earliest_outcome_date).days
+                        days_to_next_episode = (next_episode_start - reattributed_first).days
+                        setattr(dataset, f"episode_{episode_num}_{condition_name}_reattribution_valid", 
+                               days_to_next_episode < days_from_current_outcome)
+                        
+                        # 2. Check if reattributed events form a continuous sequence
+                        if condition_events.count_for_patient() > 0:
+                            last_current_event = condition_events.date.maximum_for_patient()
+                            gap_to_reattributed = (reattributed_first - last_current_event).days
+                            setattr(dataset, f"episode_{episode_num}_{condition_name}_reattribution_gap", 
+                                   gap_to_reattributed)
+                            setattr(dataset, f"episode_{episode_num}_{condition_name}_reattribution_continuous", 
+                                   gap_to_reattributed <= EVENT_WINDOWS["post_outcome_window"])
+                        
+                        # 3. Check if reattributed events are part of a pattern
+                        if episode_num > 1:
+                            prev_episode_end = getattr(dataset, f"episode_{episode_num-1}_end_date")
+                            days_from_prev_outcome = (reattributed_first - prev_episode_end).days
+                            setattr(dataset, f"episode_{episode_num}_{condition_name}_reattribution_from_prev", 
+                                   days_from_prev_outcome < EVENT_WINDOWS["future_pregnancy_buffer"])
+                        
+                        # 4. Check for potential misattribution
+                        if condition_name in ["antenatal_screening", "antenatal_risk", "antenatal_procedures"]:
+                            # For antenatal events, check if they're too close to current outcome
+                            setattr(dataset, f"episode_{episode_num}_{condition_name}_potential_misattribution", 
+                                   days_from_current_outcome < EVENT_WINDOWS["antenatal_buffer"])
+                        else:
+                            # For other events, check if they're too close to current outcome
+                            setattr(dataset, f"episode_{episode_num}_{condition_name}_potential_misattribution", 
+                                   days_from_current_outcome < EVENT_WINDOWS["future_pregnancy_buffer"])
+                        
+                        # 5. Check for overlapping events between episodes
+                        if episode_num < 5:
+                            next_episode_condition = getattr(dataset, f"episode_{episode_num+1}_{condition_name}_first_date", None)
+                            if next_episode_condition is not None:
+                                overlap = (reattributed_last >= next_episode_condition)
+                                setattr(dataset, f"episode_{episode_num}_{condition_name}_reattribution_overlap", 
+                                       overlap)
+                else:
+                    setattr(dataset, f"episode_{episode_num}_{condition_name}_reattributed_count", 0)
+                    setattr(dataset, f"episode_{episode_num}_{condition_name}_reattributed_dates", None)
+                    setattr(dataset, f"episode_{episode_num}_{condition_name}_reattributed_codes", None)
+                    setattr(dataset, f"episode_{episode_num}_{condition_name}_reattributed_first_date", None)
+                    setattr(dataset, f"episode_{episode_num}_{condition_name}_reattributed_last_date", None)
+                    setattr(dataset, f"episode_{episode_num}_{condition_name}_days_before_next_episode", None)
+                    setattr(dataset, f"episode_{episode_num}_{condition_name}_reattribution_valid", False)
+                    setattr(dataset, f"episode_{episode_num}_{condition_name}_reattribution_gap", None)
+                    setattr(dataset, f"episode_{episode_num}_{condition_name}_reattribution_continuous", False)
+                    setattr(dataset, f"episode_{episode_num}_{condition_name}_reattribution_from_prev", False)
+                    setattr(dataset, f"episode_{episode_num}_{condition_name}_potential_misattribution", False)
+                    setattr(dataset, f"episode_{episode_num}_{condition_name}_reattribution_overlap", False)
         
     else:
         # If no outcome found, use maximum window
@@ -293,7 +432,7 @@ for episode_num in range(1, 6):
         setattr(dataset, f"episode_{episode_num}_recurrent_miscarriage", False)
         
         # Impute conception date based on maximum window
-        estimated_conception = episode_start - timedelta(days=14)  # Subtract 2 weeks from start date
+        estimated_conception = episode_start - timedelta(days=14)
         setattr(dataset, f"episode_{episode_num}_estimated_conception_date", estimated_conception)
         setattr(dataset, f"episode_{episode_num}_conception_date_source", "episode_start")
 
