@@ -1,3 +1,10 @@
 {
-  "files": {}
+  "files": {
+    "opensafely-covid-identification.csv": {
+      "id": "opensafely/covid-identification/2020-06-03",
+      "url": "https://www.opencodelists.org/codelist/opensafely/covid-identification/2020-06-03/",
+      "downloaded_at": "2025-05-22 10:04:11.634113Z",
+      "sha": "124db6929439379b7dacd55ba26ae4f2ed9370bc"
+    }
+  }
 }
