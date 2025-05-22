@@ -115,6 +115,1145 @@ OUTCOME_SPECIFIC_CRITERIA = {
     }
 }
 
+# Define data quality flags and thresholds
+DATA_QUALITY_THRESHOLDS = {
+    "min_required_events": 2,  # Minimum number of pregnancy-related events
+    "max_event_gap": 280,  # Maximum gap between events in days
+    "min_gestational_age": 154,  # Minimum gestational age for live birth (22 weeks)
+    "max_gestational_age": 294,  # Maximum gestational age for live birth (42 weeks)
+    "max_outcome_gap": 84,  # Maximum gap between last event and outcome (12 weeks)
+}
+
+# Define validation rules and thresholds
+VALIDATION_RULES = {
+    "temporal": {
+        "max_booking_delay": 84,  # Maximum delay for booking visit (12 weeks)
+        "min_scan_interval": 14,  # Minimum interval between scans (2 weeks)
+        "max_scan_interval": 84,  # Maximum interval between scans (12 weeks)
+        "min_visit_interval": 7,  # Minimum interval between visits (1 week)
+        "max_visit_interval": 42,  # Maximum interval between visits (6 weeks)
+    },
+    "clinical": {
+        "max_conditions": 5,      # Maximum number of concurrent conditions
+        "max_medications": 8,     # Maximum number of concurrent medications
+        "min_weight_gain": 5,     # Minimum weight gain in kg
+        "max_weight_gain": 20,    # Maximum weight gain in kg
+        "min_blood_pressure": 90,  # Minimum systolic blood pressure
+        "max_blood_pressure": 160, # Maximum systolic blood pressure
+    },
+    "outcome": {
+        "min_birth_weight": 500,  # Minimum birth weight in grams
+        "max_birth_weight": 6000, # Maximum birth weight in grams
+        "min_apgar": 3,          # Minimum APGAR score
+        "max_apgar": 10,         # Maximum APGAR score
+    }
+}
+
+# Define validation error types
+class ValidationError:
+    TEMPORAL_ERROR = "temporal_error"
+    CLINICAL_ERROR = "clinical_error"
+    OUTCOME_ERROR = "outcome_error"
+    SEQUENCE_ERROR = "sequence_error"
+    DATA_QUALITY_ERROR = "data_quality_error"
+
+# Define confidence scoring factors and weights
+CONFIDENCE_FACTORS = {
+    "event_sequence": {
+        "pregnancy_test": 0.15,
+        "booking_visit": 0.20,
+        "dating_scan": 0.15,
+        "antenatal_screening": 0.10,
+        "antenatal_risk": 0.10,
+        "antenatal_procedures": 0.10
+    },
+    "clinical_indicators": {
+        "gestational_diabetes": 0.10,
+        "preeclampsia": 0.10,
+        "pregnancy_hypertension": 0.10,
+        "hyperemesis": 0.05,
+        "pregnancy_infection": 0.05,
+        "pregnancy_bleeding": 0.05
+    },
+    "outcome_indicators": {
+        "live_birth": 0.25,
+        "stillbirth": 0.20,
+        "miscarriage": 0.15,
+        "abortion": 0.15,
+        "ectopic_pregnancy": 0.10,
+        "molar_pregnancy": 0.10
+    },
+    "temporal_factors": {
+        "gestational_age_plausibility": 0.20,
+        "event_sequence_plausibility": 0.15,
+        "outcome_timing_plausibility": 0.15
+    },
+    "data_quality": {
+        "completeness": 0.20,
+        "consistency": 0.15,
+        "plausibility": 0.15
+    }
+}
+
+# Define confidence scoring functions
+def calculate_event_sequence_confidence(events, phase):
+    """Calculate confidence based on event sequence completeness and timing."""
+    confidence = 0.0
+    required_events = EPISODE_PHASES[phase]["key_events"]
+    
+    # Check for required events
+    for event in required_events:
+        if event in events:
+            confidence += CONFIDENCE_FACTORS["event_sequence"][event]
+    
+    # Check event sequence plausibility
+    if len(events) >= 2:
+        sorted_events = sorted(events.items(), key=lambda x: x[1])
+        for i in range(len(sorted_events) - 1):
+            current_event, current_date = sorted_events[i]
+            next_event, next_date = sorted_events[i + 1]
+            interval = (next_date - current_date).days
+            
+            # Check if interval is within expected range
+            if current_event in required_events:
+                if VALIDATION_RULES["temporal"]["min_visit_interval"] <= interval <= VALIDATION_RULES["temporal"]["max_visit_interval"]:
+                    confidence += 0.05
+    
+    return min(confidence, 1.0)
+
+def calculate_clinical_confidence(conditions, medications, phase):
+    """Calculate confidence based on clinical indicators."""
+    confidence = 0.0
+    
+    # Check for pregnancy-related conditions
+    for condition in conditions:
+        if condition in CONFIDENCE_FACTORS["clinical_indicators"]:
+            confidence += CONFIDENCE_FACTORS["clinical_indicators"][condition]
+    
+    # Check for appropriate medications
+    for medication in medications:
+        if medication in ["antihypertensives", "antidiabetics"]:
+            confidence += 0.05
+    
+    # Check for contraindicated combinations
+    contraindicated_pairs = [
+        ("antihypertensives", "pregnancy_hypertension"),
+        ("antidiabetics", "gestational_diabetes")
+    ]
+    for med, condition in contraindicated_pairs:
+        if med in medications and condition in conditions:
+            confidence -= 0.10
+    
+    return max(0.0, min(confidence, 1.0))
+
+def calculate_outcome_confidence(outcome_type, outcome_data, gestational_age):
+    """Calculate confidence based on outcome indicators and timing."""
+    confidence = 0.0
+    
+    # Base confidence from outcome type
+    if outcome_type in CONFIDENCE_FACTORS["outcome_indicators"]:
+        confidence += CONFIDENCE_FACTORS["outcome_indicators"][outcome_type]
+    
+    # Check gestational age plausibility
+    if outcome_type in ["live_birth", "stillbirth"]:
+        if 154 <= gestational_age <= 294:  # 22-42 weeks
+            confidence += CONFIDENCE_FACTORS["temporal_factors"]["gestational_age_plausibility"]
+    
+    # Check outcome data plausibility
+    if outcome_type in ["live_birth", "stillbirth"]:
+        if "birth_weight" in outcome_data and outcome_data["birth_weight"] is not None:
+            weight = outcome_data["birth_weight"]
+            if VALIDATION_RULES["outcome"]["min_birth_weight"] <= weight <= VALIDATION_RULES["outcome"]["max_birth_weight"]:
+                confidence += 0.10
+        
+        if "apgar_score" in outcome_data and outcome_data["apgar_score"] is not None:
+            apgar = outcome_data["apgar_score"]
+            if VALIDATION_RULES["outcome"]["min_apgar"] <= apgar <= VALIDATION_RULES["outcome"]["max_apgar"]:
+                confidence += 0.10
+    
+    return min(confidence, 1.0)
+
+def calculate_data_quality_confidence(quality_flags, validation_errors):
+    """Calculate confidence based on data quality indicators."""
+    confidence = 1.0
+    
+    # Penalize for data quality flags
+    for flag in quality_flags:
+        if flag in [DataQualityFlags.MISSING_KEY_EVENTS, DataQualityFlags.INCONSISTENT_DATES]:
+            confidence -= 0.20
+        elif flag in [DataQualityFlags.GAP_IN_EVENTS, DataQualityFlags.CONFLICTING_OUTCOMES]:
+            confidence -= 0.15
+        elif flag in [DataQualityFlags.INVALID_GESTATIONAL_AGE, DataQualityFlags.DUPLICATE_EVENTS]:
+            confidence -= 0.10
+    
+    # Penalize for validation errors
+    for error in validation_errors:
+        if error == ValidationError.TEMPORAL_ERROR:
+            confidence -= 0.15
+        elif error == ValidationError.CLINICAL_ERROR:
+            confidence -= 0.20
+        elif error == ValidationError.OUTCOME_ERROR:
+            confidence -= 0.25
+        elif error == ValidationError.SEQUENCE_ERROR:
+            confidence -= 0.15
+        elif error == ValidationError.DATA_QUALITY_ERROR:
+            confidence -= 0.10
+    
+    return max(0.0, min(confidence, 1.0))
+
+# Define data quality flags
+class DataQualityFlags:
+    MISSING_KEY_EVENTS = "missing_key_events"
+    INCONSISTENT_DATES = "inconsistent_dates"
+    GAP_IN_EVENTS = "gap_in_events"
+    CONFLICTING_OUTCOMES = "conflicting_outcomes"
+    INVALID_GESTATIONAL_AGE = "invalid_gestational_age"
+    DUPLICATE_EVENTS = "duplicate_events"
+    MISSING_OUTCOME = "missing_outcome"
+    INCOMPLETE_EPISODE = "incomplete_episode"
+
+# Define flexible time windows for different care models
+CARE_MODEL_WINDOWS = {
+    "standard": {
+        "antenatal_start": 84,  # 12 weeks
+        "antenatal_end": 280,   # 40 weeks
+        "postpartum": 84,       # 12 weeks
+        "min_episode_gap": 180  # 6 months
+    },
+    "high_risk": {
+        "antenatal_start": 0,   # Immediate
+        "antenatal_end": 280,   # 40 weeks
+        "postpartum": 180,      # 26 weeks
+        "min_episode_gap": 365  # 12 months
+    },
+    "community": {
+        "antenatal_start": 84,  # 12 weeks
+        "antenatal_end": 280,   # 40 weeks
+        "postpartum": 42,       # 6 weeks
+        "min_episode_gap": 180  # 6 months
+    }
+}
+
+# Define episode phases and their characteristics
+EPISODE_PHASES = {
+    "pre_conception": {
+        "start_window": -180,  # 6 months before
+        "end_window": 0,       # Conception
+        "key_events": ["pregnancy_test", "booking_visit"]
+    },
+    "first_trimester": {
+        "start_window": 0,     # Conception
+        "end_window": 84,      # 12 weeks
+        "key_events": ["pregnancy_test", "booking_visit", "dating_scan"]
+    },
+    "second_trimester": {
+        "start_window": 84,    # 12 weeks
+        "end_window": 196,     # 28 weeks
+        "key_events": ["antenatal_screening", "antenatal_risk"]
+    },
+    "third_trimester": {
+        "start_window": 196,   # 28 weeks
+        "end_window": 280,     # 40 weeks
+        "key_events": ["antenatal_screening", "antenatal_risk", "antenatal_procedures"]
+    },
+    "postpartum": {
+        "start_window": 0,     # Delivery
+        "end_window": 84,      # 12 weeks
+        "key_events": ["postpartum_hemorrhage", "third_degree_tear"]
+    }
+}
+
+# Define episode types and their characteristics
+EPISODE_TYPES = {
+    "standard": {
+        "min_events": 2,
+        "required_events": ["pregnancy_test", "booking_visit"],
+        "confidence_threshold": 0.7
+    },
+    "high_risk": {
+        "min_events": 3,
+        "required_events": ["pregnancy_test", "booking_visit", "antenatal_risk"],
+        "confidence_threshold": 0.8
+    },
+    "community": {
+        "min_events": 2,
+        "required_events": ["pregnancy_test", "booking_visit"],
+        "confidence_threshold": 0.6
+    }
+}
+
+# Define data quality metrics and thresholds
+DATA_QUALITY_METRICS = {
+    "completeness": {
+        "min_required_events": 2,
+        "min_required_outcomes": 1,
+        "min_required_dates": 2
+    },
+    "consistency": {
+        "max_date_gap": 280,  # Maximum gap between events (40 weeks)
+        "min_date_gap": 7,    # Minimum gap between events (1 week)
+        "max_gestational_age": 294,  # Maximum gestational age (42 weeks)
+        "min_gestational_age": 154   # Minimum gestational age (22 weeks)
+    },
+    "plausibility": {
+        "max_concurrent_conditions": 5,
+        "max_concurrent_medications": 8,
+        "max_weight_gain": 20,  # kg
+        "min_weight_gain": 5,   # kg
+        "max_blood_pressure": 160,
+        "min_blood_pressure": 90
+    },
+    "temporal": {
+        "max_booking_delay": 84,  # Maximum delay for booking visit (12 weeks)
+        "min_scan_interval": 14,  # Minimum interval between scans (2 weeks)
+        "max_scan_interval": 84,  # Maximum interval between scans (12 weeks)
+        "min_visit_interval": 7,  # Minimum interval between visits (1 week)
+        "max_visit_interval": 42  # Maximum interval between visits (6 weeks)
+    }
+}
+
+# Define data quality check functions
+def check_completeness(events, outcomes, dates):
+    """Check completeness of pregnancy episode data."""
+    issues = []
+    
+    # Check required events
+    if len(events) < DATA_QUALITY_METRICS["completeness"]["min_required_events"]:
+        issues.append({
+            "type": "missing_events",
+            "severity": "high",
+            "message": f"Too few events: {len(events)} < {DATA_QUALITY_METRICS['completeness']['min_required_events']}"
+        })
+    
+    # Check required outcomes
+    if len(outcomes) < DATA_QUALITY_METRICS["completeness"]["min_required_outcomes"]:
+        issues.append({
+            "type": "missing_outcomes",
+            "severity": "high",
+            "message": "No pregnancy outcome recorded"
+        })
+    
+    # Check required dates
+    if len(dates) < DATA_QUALITY_METRICS["completeness"]["min_required_dates"]:
+        issues.append({
+            "type": "missing_dates",
+            "severity": "medium",
+            "message": f"Too few dates: {len(dates)} < {DATA_QUALITY_METRICS['completeness']['min_required_dates']}"
+        })
+    
+    return issues
+
+def check_consistency(events, gestational_age):
+    """Check consistency of pregnancy episode data."""
+    issues = []
+    
+    # Check date gaps
+    if len(events) >= 2:
+        sorted_dates = sorted(events.values())
+        for i in range(len(sorted_dates) - 1):
+            gap = (sorted_dates[i + 1] - sorted_dates[i]).days
+            if gap > DATA_QUALITY_METRICS["consistency"]["max_date_gap"]:
+                issues.append({
+                    "type": "large_date_gap",
+                    "severity": "medium",
+                    "message": f"Large gap between events: {gap} days"
+                })
+            elif gap < DATA_QUALITY_METRICS["consistency"]["min_date_gap"]:
+                issues.append({
+                    "type": "small_date_gap",
+                    "severity": "low",
+                    "message": f"Small gap between events: {gap} days"
+                })
+    
+    # Check gestational age
+    if gestational_age is not None:
+        if gestational_age > DATA_QUALITY_METRICS["consistency"]["max_gestational_age"]:
+            issues.append({
+                "type": "high_gestational_age",
+                "severity": "high",
+                "message": f"Gestational age too high: {gestational_age} days"
+            })
+        elif gestational_age < DATA_QUALITY_METRICS["consistency"]["min_gestational_age"]:
+            issues.append({
+                "type": "low_gestational_age",
+                "severity": "high",
+                "message": f"Gestational age too low: {gestational_age} days"
+            })
+    
+    return issues
+
+def check_plausibility(conditions, medications, measurements):
+    """Check plausibility of clinical data."""
+    issues = []
+    
+    # Check concurrent conditions
+    if len(conditions) > DATA_QUALITY_METRICS["plausibility"]["max_concurrent_conditions"]:
+        issues.append({
+            "type": "too_many_conditions",
+            "severity": "medium",
+            "message": f"Too many concurrent conditions: {len(conditions)}"
+        })
+    
+    # Check concurrent medications
+    if len(medications) > DATA_QUALITY_METRICS["plausibility"]["max_concurrent_medications"]:
+        issues.append({
+            "type": "too_many_medications",
+            "severity": "medium",
+            "message": f"Too many concurrent medications: {len(medications)}"
+        })
+    
+    # Check measurements
+    if "weight_gain" in measurements:
+        weight_gain = measurements["weight_gain"]
+        if weight_gain > DATA_QUALITY_METRICS["plausibility"]["max_weight_gain"]:
+            issues.append({
+                "type": "high_weight_gain",
+                "severity": "medium",
+                "message": f"Weight gain too high: {weight_gain} kg"
+            })
+        elif weight_gain < DATA_QUALITY_METRICS["plausibility"]["min_weight_gain"]:
+            issues.append({
+                "type": "low_weight_gain",
+                "severity": "medium",
+                "message": f"Weight gain too low: {weight_gain} kg"
+            })
+    
+    if "blood_pressure" in measurements:
+        bp = measurements["blood_pressure"]
+        if bp > DATA_QUALITY_METRICS["plausibility"]["max_blood_pressure"]:
+            issues.append({
+                "type": "high_blood_pressure",
+                "severity": "high",
+                "message": f"Blood pressure too high: {bp}"
+            })
+        elif bp < DATA_QUALITY_METRICS["plausibility"]["min_blood_pressure"]:
+            issues.append({
+                "type": "low_blood_pressure",
+                "severity": "high",
+                "message": f"Blood pressure too low: {bp}"
+            })
+    
+    return issues
+
+def check_temporal_sequence(events, phase):
+    """Check temporal sequence of events."""
+    issues = []
+    
+    if not events:
+        return issues
+    
+    # Sort events by date
+    sorted_events = sorted(events.items(), key=lambda x: x[1])
+    
+    # Check booking visit delay
+    if "booking_visit" in events:
+        booking_date = events["booking_visit"]
+        pregnancy_test_date = events.get("pregnancy_test")
+        if pregnancy_test_date:
+            delay = (booking_date - pregnancy_test_date).days
+            if delay > DATA_QUALITY_METRICS["temporal"]["max_booking_delay"]:
+                issues.append({
+                    "type": "late_booking",
+                    "severity": "medium",
+                    "message": f"Booking visit too late: {delay} days after pregnancy test"
+                })
+    
+    # Check scan intervals
+    scan_dates = [date for event, date in sorted_events if "scan" in event.lower()]
+    if len(scan_dates) >= 2:
+        for i in range(len(scan_dates) - 1):
+            interval = (scan_dates[i + 1] - scan_dates[i]).days
+            if interval < DATA_QUALITY_METRICS["temporal"]["min_scan_interval"]:
+                issues.append({
+                    "type": "frequent_scans",
+                    "severity": "low",
+                    "message": f"Scans too frequent: {interval} days apart"
+                })
+            elif interval > DATA_QUALITY_METRICS["temporal"]["max_scan_interval"]:
+                issues.append({
+                    "type": "infrequent_scans",
+                    "severity": "medium",
+                    "message": f"Scans too infrequent: {interval} days apart"
+                })
+    
+    # Check visit intervals
+    visit_dates = [date for event, date in sorted_events if "visit" in event.lower()]
+    if len(visit_dates) >= 2:
+        for i in range(len(visit_dates) - 1):
+            interval = (visit_dates[i + 1] - visit_dates[i]).days
+            if interval < DATA_QUALITY_METRICS["temporal"]["min_visit_interval"]:
+                issues.append({
+                    "type": "frequent_visits",
+                    "severity": "low",
+                    "message": f"Visits too frequent: {interval} days apart"
+                })
+            elif interval > DATA_QUALITY_METRICS["temporal"]["max_visit_interval"]:
+                issues.append({
+                    "type": "infrequent_visits",
+                    "severity": "medium",
+                    "message": f"Visits too infrequent: {interval} days apart"
+                })
+    
+    return issues
+
+# Define episode identification criteria
+EPISODE_IDENTIFICATION = {
+    "primary_indicators": {
+        "pregnancy_test": 0.3,
+        "booking_visit": 0.3,
+        "dating_scan": 0.2,
+        "antenatal_screening": 0.2
+    },
+    "secondary_indicators": {
+        "gestational_diabetes": 0.1,
+        "preeclampsia": 0.1,
+        "pregnancy_hypertension": 0.1,
+        "hyperemesis": 0.05,
+        "pregnancy_infection": 0.05
+    },
+    "outcome_indicators": {
+        "live_birth": 0.4,
+        "stillbirth": 0.3,
+        "miscarriage": 0.2,
+        "abortion": 0.2,
+        "ectopic_pregnancy": 0.3,
+        "molar_pregnancy": 0.3
+    },
+    "temporal_rules": {
+        "min_episode_gap": 180,  # Minimum gap between episodes (6 months)
+        "max_episode_duration": 294,  # Maximum episode duration (42 weeks)
+        "min_episode_duration": 154,  # Minimum episode duration (22 weeks)
+        "max_outcome_delay": 84  # Maximum delay after last event (12 weeks)
+    }
+}
+
+# Define episode identification functions
+def identify_episode_start(events, previous_episode_end=None):
+    """Identify the start of a pregnancy episode."""
+    if not events:
+        return None
+    
+    # Sort events by date
+    sorted_events = sorted(events.items(), key=lambda x: x[1])
+    
+    # If there's a previous episode, ensure minimum gap
+    if previous_episode_end:
+        min_start_date = previous_episode_end + timedelta(days=EPISODE_IDENTIFICATION["temporal_rules"]["min_episode_gap"])
+        valid_events = {k: v for k, v in events.items() if v >= min_start_date}
+        if not valid_events:
+            return None
+        sorted_events = sorted(valid_events.items(), key=lambda x: x[1])
+    
+    # Find earliest primary indicator
+    for event_type, date in sorted_events:
+        if event_type in EPISODE_IDENTIFICATION["primary_indicators"]:
+            return date
+    
+    # If no primary indicator, use earliest event
+    return sorted_events[0][1]
+
+def identify_episode_end(events, start_date, outcomes):
+    """Identify the end of a pregnancy episode."""
+    if not outcomes:
+        # If no outcome, use maximum duration
+        return start_date + timedelta(days=EPISODE_IDENTIFICATION["temporal_rules"]["max_episode_duration"])
+    
+    # Find earliest outcome
+    earliest_outcome_date = min(outcomes.values())
+    
+    # Check if outcome is within valid range
+    episode_duration = (earliest_outcome_date - start_date).days
+    if episode_duration < EPISODE_IDENTIFICATION["temporal_rules"]["min_episode_duration"]:
+        return None  # Invalid episode duration
+    
+    # Check if there are events after the outcome
+    later_events = {k: v for k, v in events.items() if v > earliest_outcome_date}
+    if later_events:
+        latest_event = max(later_events.values())
+        if (latest_event - earliest_outcome_date).days > EPISODE_IDENTIFICATION["temporal_rules"]["max_outcome_delay"]:
+            return None  # Too much time between outcome and last event
+    
+    return earliest_outcome_date
+
+def calculate_episode_confidence(events, outcomes, start_date, end_date):
+    """Calculate confidence score for episode identification."""
+    confidence = 0.0
+    
+    # Check primary indicators
+    for event_type, weight in EPISODE_IDENTIFICATION["primary_indicators"].items():
+        if event_type in events:
+            event_date = events[event_type]
+            if start_date <= event_date <= end_date:
+                confidence += weight
+    
+    # Check secondary indicators
+    for event_type, weight in EPISODE_IDENTIFICATION["secondary_indicators"].items():
+        if event_type in events:
+            event_date = events[event_type]
+            if start_date <= event_date <= end_date:
+                confidence += weight
+    
+    # Check outcome indicators
+    for outcome_type, weight in EPISODE_IDENTIFICATION["outcome_indicators"].items():
+        if outcome_type in outcomes:
+            outcome_date = outcomes[outcome_type]
+            if start_date <= outcome_date <= end_date:
+                confidence += weight
+    
+    # Check temporal validity
+    episode_duration = (end_date - start_date).days
+    if EPISODE_IDENTIFICATION["temporal_rules"]["min_episode_duration"] <= episode_duration <= EPISODE_IDENTIFICATION["temporal_rules"]["max_episode_duration"]:
+        confidence += 0.2
+    
+    return min(confidence, 1.0)
+
+def validate_episode_sequence(episodes):
+    """Validate the sequence of pregnancy episodes."""
+    if not episodes:
+        return True
+    
+    # Sort episodes by start date
+    sorted_episodes = sorted(episodes, key=lambda x: x["start_date"])
+    
+    # Check for overlapping episodes
+    for i in range(len(sorted_episodes) - 1):
+        current_end = sorted_episodes[i]["end_date"]
+        next_start = sorted_episodes[i + 1]["start_date"]
+        if next_start < current_end:
+            return False
+    
+    # Check minimum gap between episodes
+    for i in range(len(sorted_episodes) - 1):
+        current_end = sorted_episodes[i]["end_date"]
+        next_start = sorted_episodes[i + 1]["start_date"]
+        gap = (next_start - current_end).days
+        if gap < EPISODE_IDENTIFICATION["temporal_rules"]["min_episode_gap"]:
+            return False
+    
+    return True
+
+# Define outcome classification criteria
+OUTCOME_CLASSIFICATION = {
+    "primary_outcomes": {
+        "live_birth": {
+            "weight": 0.4,
+            "min_gestational_age": 154,  # 22 weeks
+            "max_gestational_age": 294,  # 42 weeks
+            "required_events": ["booking_visit", "antenatal_screening"],
+            "optional_events": ["dating_scan", "antenatal_risk"],
+            "complications": ["postpartum_hemorrhage", "third_degree_tear", "shoulder_dystocia"]
+        },
+        "stillbirth": {
+            "weight": 0.3,
+            "min_gestational_age": 154,  # 22 weeks
+            "max_gestational_age": 294,  # 42 weeks
+            "required_events": ["booking_visit", "antenatal_screening"],
+            "optional_events": ["dating_scan", "antenatal_risk"],
+            "complications": ["placenta_previa", "placental_abruption"]
+        },
+        "miscarriage": {
+            "weight": 0.2,
+            "min_gestational_age": 0,
+            "max_gestational_age": 196,  # 28 weeks
+            "required_events": ["pregnancy_test"],
+            "optional_events": ["booking_visit", "dating_scan"],
+            "complications": ["pregnancy_bleeding", "pregnancy_infection"]
+        },
+        "abortion": {
+            "weight": 0.2,
+            "min_gestational_age": 0,
+            "max_gestational_age": 196,  # 28 weeks
+            "required_events": ["pregnancy_test"],
+            "optional_events": ["booking_visit"],
+            "complications": ["pregnancy_bleeding", "pregnancy_infection"]
+        },
+        "ectopic_pregnancy": {
+            "weight": 0.3,
+            "min_gestational_age": 0,
+            "max_gestational_age": 84,  # 12 weeks
+            "required_events": ["pregnancy_test"],
+            "optional_events": ["dating_scan"],
+            "complications": ["pregnancy_bleeding", "pregnancy_infection"]
+        },
+        "molar_pregnancy": {
+            "weight": 0.3,
+            "min_gestational_age": 0,
+            "max_gestational_age": 196,  # 28 weeks
+            "required_events": ["pregnancy_test", "dating_scan"],
+            "optional_events": ["booking_visit"],
+            "complications": ["pregnancy_bleeding", "pregnancy_infection"]
+        }
+    },
+    "outcome_characteristics": {
+        "gestational_age_ranges": {
+            "very_preterm": (154, 195),  # 22-27 weeks
+            "preterm": (196, 258),      # 28-36 weeks
+            "term": (259, 294),         # 37-42 weeks
+            "post_term": (295, 308)     # 43-44 weeks
+        },
+        "birth_weight_ranges": {
+            "very_low": (500, 1499),    # 500g-1.5kg
+            "low": (1500, 2499),        # 1.5kg-2.5kg
+            "normal": (2500, 3999),     # 2.5kg-4kg
+            "high": (4000, 6000)        # 4kg-6kg
+        },
+        "apgar_score_ranges": {
+            "low": (0, 3),
+            "moderate": (4, 6),
+            "normal": (7, 10)
+        }
+    },
+    "outcome_validation": {
+        "min_required_events": 1,
+        "max_event_outcome_gap": 84,  # 12 weeks
+        "min_outcome_confidence": 0.6,
+        "max_outcome_delay": 84  # 12 weeks
+    }
+}
+
+# Define outcome classification functions
+def classify_outcome_type(events, outcomes, gestational_age):
+    """Classify the type of pregnancy outcome."""
+    if not outcomes:
+        return None, 0.0
+    
+    best_outcome = None
+    best_confidence = 0.0
+    
+    for outcome_type, outcome_date in outcomes.items():
+        if outcome_type not in OUTCOME_CLASSIFICATION["primary_outcomes"]:
+            continue
+        
+        outcome_info = OUTCOME_CLASSIFICATION["primary_outcomes"][outcome_type]
+        confidence = 0.0
+        
+        # Check gestational age
+        if outcome_info["min_gestational_age"] <= gestational_age <= outcome_info["max_gestational_age"]:
+            confidence += 0.3
+        
+        # Check required events
+        required_events_present = all(event in events for event in outcome_info["required_events"])
+        if required_events_present:
+            confidence += 0.3
+        
+        # Check optional events
+        optional_events_present = any(event in events for event in outcome_info["optional_events"])
+        if optional_events_present:
+            confidence += 0.2
+        
+        # Check complications
+        complications_present = any(comp in events for comp in outcome_info["complications"])
+        if complications_present:
+            confidence += 0.2
+        
+        if confidence > best_confidence:
+            best_outcome = outcome_type
+            best_confidence = confidence
+    
+    return best_outcome, best_confidence
+
+def classify_outcome_characteristics(outcome_type, outcome_data):
+    """Classify the characteristics of a pregnancy outcome."""
+    characteristics = {
+        "gestational_age_category": None,
+        "birth_weight_category": None,
+        "apgar_category": None,
+        "complications": []
+    }
+    
+    # Classify gestational age
+    if "gestational_age" in outcome_data:
+        age = outcome_data["gestational_age"]
+        for category, (min_age, max_age) in OUTCOME_CLASSIFICATION["outcome_characteristics"]["gestational_age_ranges"].items():
+            if min_age <= age <= max_age:
+                characteristics["gestational_age_category"] = category
+                break
+    
+    # Classify birth weight
+    if "birth_weight" in outcome_data:
+        weight = outcome_data["birth_weight"]
+        for category, (min_weight, max_weight) in OUTCOME_CLASSIFICATION["outcome_characteristics"]["birth_weight_ranges"].items():
+            if min_weight <= weight <= max_weight:
+                characteristics["birth_weight_category"] = category
+                break
+    
+    # Classify APGAR score
+    if "apgar_score" in outcome_data:
+        apgar = outcome_data["apgar_score"]
+        for category, (min_score, max_score) in OUTCOME_CLASSIFICATION["outcome_characteristics"]["apgar_score_ranges"].items():
+            if min_score <= apgar <= max_score:
+                characteristics["apgar_category"] = category
+                break
+    
+    # Identify complications
+    if outcome_type in OUTCOME_CLASSIFICATION["primary_outcomes"]:
+        outcome_info = OUTCOME_CLASSIFICATION["primary_outcomes"][outcome_type]
+        characteristics["complications"] = [
+            comp for comp in outcome_info["complications"]
+            if comp in outcome_data.get("complications", [])
+        ]
+    
+    return characteristics
+
+def validate_outcome(outcome_type, outcome_data, events, gestational_age):
+    """Validate a pregnancy outcome."""
+    validation_issues = []
+    
+    if outcome_type not in OUTCOME_CLASSIFICATION["primary_outcomes"]:
+        validation_issues.append({
+            "type": "invalid_outcome_type",
+            "severity": "high",
+            "message": f"Invalid outcome type: {outcome_type}"
+        })
+        return validation_issues
+    
+    outcome_info = OUTCOME_CLASSIFICATION["primary_outcomes"][outcome_type]
+    
+    # Validate gestational age
+    if gestational_age < outcome_info["min_gestational_age"]:
+        validation_issues.append({
+            "type": "gestational_age_too_low",
+            "severity": "high",
+            "message": f"Gestational age {gestational_age} days is below minimum {outcome_info['min_gestational_age']} days"
+        })
+    elif gestational_age > outcome_info["max_gestational_age"]:
+        validation_issues.append({
+            "type": "gestational_age_too_high",
+            "severity": "high",
+            "message": f"Gestational age {gestational_age} days is above maximum {outcome_info['max_gestational_age']} days"
+        })
+    
+    # Validate required events
+    missing_required = [event for event in outcome_info["required_events"] if event not in events]
+    if missing_required:
+        validation_issues.append({
+            "type": "missing_required_events",
+            "severity": "high",
+            "message": f"Missing required events: {', '.join(missing_required)}"
+        })
+    
+    # Validate outcome data
+    if "birth_weight" in outcome_data:
+        weight = outcome_data["birth_weight"]
+        if weight < OUTCOME_CLASSIFICATION["outcome_characteristics"]["birth_weight_ranges"]["very_low"][0]:
+            validation_issues.append({
+                "type": "birth_weight_too_low",
+                "severity": "high",
+                "message": f"Birth weight {weight}g is below minimum {OUTCOME_CLASSIFICATION['outcome_characteristics']['birth_weight_ranges']['very_low'][0]}g"
+            })
+        elif weight > OUTCOME_CLASSIFICATION["outcome_characteristics"]["birth_weight_ranges"]["high"][1]:
+            validation_issues.append({
+                "type": "birth_weight_too_high",
+                "severity": "high",
+                "message": f"Birth weight {weight}g is above maximum {OUTCOME_CLASSIFICATION['outcome_characteristics']['birth_weight_ranges']['high'][1]}g"
+            })
+    
+    if "apgar_score" in outcome_data:
+        apgar = outcome_data["apgar_score"]
+        if apgar < OUTCOME_CLASSIFICATION["outcome_characteristics"]["apgar_score_ranges"]["low"][0]:
+            validation_issues.append({
+                "type": "apgar_score_too_low",
+                "severity": "high",
+                "message": f"APGAR score {apgar} is below minimum {OUTCOME_CLASSIFICATION['outcome_characteristics']['apgar_score_ranges']['low'][0]}"
+            })
+        elif apgar > OUTCOME_CLASSIFICATION["outcome_characteristics"]["apgar_score_ranges"]["normal"][1]:
+            validation_issues.append({
+                "type": "apgar_score_too_high",
+                "severity": "high",
+                "message": f"APGAR score {apgar} is above maximum {OUTCOME_CLASSIFICATION['outcome_characteristics']['apgar_score_ranges']['normal'][1]}"
+            })
+    
+    return validation_issues
+
+# Define data quality reporting criteria
+DATA_QUALITY_REPORTING = {
+    "metrics": {
+        "completeness": {
+            "required_events": ["pregnancy_test", "booking_visit"],
+            "required_outcomes": ["live_birth", "stillbirth", "miscarriage", "abortion"],
+            "required_dates": ["start_date", "end_date"],
+            "required_measurements": ["gestational_age", "birth_weight"]
+        },
+        "consistency": {
+            "date_ranges": {
+                "min_gap": 7,  # Minimum gap between events (1 week)
+                "max_gap": 280,  # Maximum gap between events (40 weeks)
+                "min_gestational_age": 154,  # Minimum gestational age (22 weeks)
+                "max_gestational_age": 294  # Maximum gestational age (42 weeks)
+            },
+            "value_ranges": {
+                "birth_weight": (500, 6000),  # 500g-6kg
+                "apgar_score": (0, 10),
+                "blood_pressure": (90, 160)
+            }
+        },
+        "plausibility": {
+            "max_concurrent_conditions": 5,
+            "max_concurrent_medications": 8,
+            "max_weight_gain": 20,  # kg
+            "min_weight_gain": 5,  # kg
+            "max_blood_pressure": 160,
+            "min_blood_pressure": 90
+        }
+    },
+    "severity_weights": {
+        "critical": 1.0,
+        "high": 0.8,
+        "medium": 0.5,
+        "low": 0.2
+    },
+    "reporting_thresholds": {
+        "min_quality_score": 0.6,
+        "max_issues_per_episode": 5,
+        "max_missing_required": 1
+    }
+}
+
+# Define data quality reporting functions
+def generate_quality_report(episode_data):
+    """Generate a comprehensive data quality report for an episode."""
+    report = {
+        "episode_number": episode_data["number"],
+        "quality_score": 0.0,
+        "completeness": {
+            "score": 0.0,
+            "missing_required": [],
+            "missing_optional": [],
+            "issues": []
+        },
+        "consistency": {
+            "score": 0.0,
+            "date_issues": [],
+            "value_issues": [],
+            "issues": []
+        },
+        "plausibility": {
+            "score": 0.0,
+            "clinical_issues": [],
+            "temporal_issues": [],
+            "issues": []
+        },
+        "validation": {
+            "score": 0.0,
+            "outcome_issues": [],
+            "event_sequence_issues": [],
+            "issues": []
+        },
+        "summary": {
+            "critical_issues": [],
+            "high_priority_issues": [],
+            "medium_priority_issues": [],
+            "low_priority_issues": []
+        }
+    }
+    
+    # Check completeness
+    for event_type in DATA_QUALITY_REPORTING["metrics"]["completeness"]["required_events"]:
+        if event_type not in episode_data["events"]:
+            report["completeness"]["missing_required"].append(event_type)
+            report["completeness"]["issues"].append({
+                "type": "missing_required_event",
+                "severity": "high",
+                "message": f"Missing required event: {event_type}"
+            })
+    
+    for outcome_type in DATA_QUALITY_REPORTING["metrics"]["completeness"]["required_outcomes"]:
+        if outcome_type not in episode_data["outcomes"]:
+            report["completeness"]["missing_required"].append(outcome_type)
+            report["completeness"]["issues"].append({
+                "type": "missing_required_outcome",
+                "severity": "high",
+                "message": f"Missing required outcome: {outcome_type}"
+            })
+    
+    # Check consistency
+    if episode_data["start_date"] and episode_data["end_date"]:
+        gestational_age = (episode_data["end_date"] - episode_data["start_date"]).days
+        if gestational_age < DATA_QUALITY_REPORTING["metrics"]["consistency"]["date_ranges"]["min_gestational_age"]:
+            report["consistency"]["date_issues"].append({
+                "type": "gestational_age_too_low",
+                "severity": "high",
+                "message": f"Gestational age {gestational_age} days is below minimum"
+            })
+        elif gestational_age > DATA_QUALITY_REPORTING["metrics"]["consistency"]["date_ranges"]["max_gestational_age"]:
+            report["consistency"]["date_issues"].append({
+                "type": "gestational_age_too_high",
+                "severity": "high",
+                "message": f"Gestational age {gestational_age} days is above maximum"
+            })
+    
+    # Check plausibility
+    conditions_count = len([c for c in episode_data["events"] if c in [
+        "gestational_diabetes", "preeclampsia", "pregnancy_hypertension",
+        "hyperemesis", "pregnancy_infection", "pregnancy_bleeding"
+    ]])
+    if conditions_count > DATA_QUALITY_REPORTING["metrics"]["plausibility"]["max_concurrent_conditions"]:
+        report["plausibility"]["clinical_issues"].append({
+            "type": "too_many_conditions",
+            "severity": "medium",
+            "message": f"Too many concurrent conditions: {conditions_count}"
+        })
+    
+    # Check validation
+    if "outcome_type" in episode_data:
+        outcome_validation = validate_outcome(
+            episode_data["outcome_type"],
+            episode_data.get("outcome_data", {}),
+            episode_data["events"],
+            gestational_age
+        )
+        report["validation"]["issues"].extend(outcome_validation)
+    
+    # Calculate scores
+    report["completeness"]["score"] = calculate_completeness_score(report["completeness"])
+    report["consistency"]["score"] = calculate_consistency_score(report["consistency"])
+    report["plausibility"]["score"] = calculate_plausibility_score(report["plausibility"])
+    report["validation"]["score"] = calculate_validation_score(report["validation"])
+    
+    # Calculate overall quality score
+    report["quality_score"] = calculate_overall_quality_score(report)
+    
+    # Categorize issues by severity
+    for category in ["completeness", "consistency", "plausibility", "validation"]:
+        for issue in report[category]["issues"]:
+            severity = issue["severity"]
+            if severity == "critical":
+                report["summary"]["critical_issues"].append(issue)
+            elif severity == "high":
+                report["summary"]["high_priority_issues"].append(issue)
+            elif severity == "medium":
+                report["summary"]["medium_priority_issues"].append(issue)
+            else:
+                report["summary"]["low_priority_issues"].append(issue)
+    
+    return report
+
+def calculate_completeness_score(completeness_data):
+    """Calculate completeness score."""
+    if not completeness_data["missing_required"]:
+        return 1.0
+    
+    total_required = len(DATA_QUALITY_REPORTING["metrics"]["completeness"]["required_events"]) + \
+                    len(DATA_QUALITY_REPORTING["metrics"]["completeness"]["required_outcomes"])
+    missing_count = len(completeness_data["missing_required"])
+    
+    return max(0.0, 1.0 - (missing_count / total_required))
+
+def calculate_consistency_score(consistency_data):
+    """Calculate consistency score."""
+    if not consistency_data["date_issues"] and not consistency_data["value_issues"]:
+        return 1.0
+    
+    total_issues = len(consistency_data["date_issues"]) + len(consistency_data["value_issues"])
+    max_allowed_issues = 3  # Maximum number of consistency issues before score drops to 0
+    
+    return max(0.0, 1.0 - (total_issues / max_allowed_issues))
+
+def calculate_plausibility_score(plausibility_data):
+    """Calculate plausibility score."""
+    if not plausibility_data["clinical_issues"] and not plausibility_data["temporal_issues"]:
+        return 1.0
+    
+    total_issues = len(plausibility_data["clinical_issues"]) + len(plausibility_data["temporal_issues"])
+    max_allowed_issues = 4  # Maximum number of plausibility issues before score drops to 0
+    
+    return max(0.0, 1.0 - (total_issues / max_allowed_issues))
+
+def calculate_validation_score(validation_data):
+    """Calculate validation score."""
+    if not validation_data["issues"]:
+        return 1.0
+    
+    total_issues = len(validation_data["issues"])
+    max_allowed_issues = 2  # Maximum number of validation issues before score drops to 0
+    
+    return max(0.0, 1.0 - (total_issues / max_allowed_issues))
+
+def calculate_overall_quality_score(report):
+    """Calculate overall quality score."""
+    weights = {
+        "completeness": 0.3,
+        "consistency": 0.3,
+        "plausibility": 0.2,
+        "validation": 0.2
+    }
+    
+    score = 0.0
+    for category, weight in weights.items():
+        score += report[category]["score"] * weight
+    
+    return score
+
+def generate_dataset_quality_summary(episodes):
+    """Generate a summary of data quality across all episodes."""
+    summary = {
+        "total_episodes": len(episodes),
+        "quality_scores": {
+            "excellent": 0,  # ≥ 0.9
+            "good": 0,      # ≥ 0.8
+            "fair": 0,      # ≥ 0.7
+            "poor": 0,      # ≥ 0.6
+            "unacceptable": 0  # < 0.6
+        },
+        "common_issues": {
+            "critical": [],
+            "high": [],
+            "medium": [],
+            "low": []
+        },
+        "completeness": {
+            "missing_required_events": {},
+            "missing_required_outcomes": {}
+        },
+        "consistency": {
+            "date_issues": {},
+            "value_issues": {}
+        },
+        "plausibility": {
+            "clinical_issues": {},
+            "temporal_issues": {}
+        }
+    }
+    
+    # Process each episode
+    for episode in episodes:
+        report = generate_quality_report(episode)
+        
+        # Categorize quality score
+        score = report["quality_score"]
+        if score >= 0.9:
+            summary["quality_scores"]["excellent"] += 1
+        elif score >= 0.8:
+            summary["quality_scores"]["good"] += 1
+        elif score >= 0.7:
+            summary["quality_scores"]["fair"] += 1
+        elif score >= 0.6:
+            summary["quality_scores"]["poor"] += 1
+        else:
+            summary["quality_scores"]["unacceptable"] += 1
+        
+        # Track common issues
+        for severity in ["critical", "high", "medium", "low"]:
+            issues = report["summary"][f"{severity}_priority_issues"]
+            for issue in issues:
+                issue_type = issue["type"]
+                if issue_type not in summary["common_issues"][severity]:
+                    summary["common_issues"][severity][issue_type] = 0
+                summary["common_issues"][severity][issue_type] += 1
+        
+        # Track completeness issues
+        for event in report["completeness"]["missing_required"]:
+            if event in DATA_QUALITY_REPORTING["metrics"]["completeness"]["required_events"]:
+                if event not in summary["completeness"]["missing_required_events"]:
+                    summary["completeness"]["missing_required_events"][event] = 0
+                summary["completeness"]["missing_required_events"][event] += 1
+            elif event in DATA_QUALITY_REPORTING["metrics"]["completeness"]["required_outcomes"]:
+                if event not in summary["completeness"]["missing_required_outcomes"]:
+                    summary["completeness"]["missing_required_outcomes"][event] = 0
+                summary["completeness"]["missing_required_outcomes"][event] += 1
+    
+    return summary
+
 # --- 2. Create Dataset and Define Population ---
 dataset = create_dataset()
 age = patients.age_on("2020-03-31")
@@ -214,393 +1353,141 @@ outcome_events = clinical_events.where(
 )
 
 # Create episode-level variables for up to 5 episodes per patient
-for episode_num in range(1, 6):
-    # For first episode, use earliest pregnancy event
-    if episode_num == 1:
-        episode_start = pregnancy_events.date.minimum_for_patient()
-    else:
-        # For subsequent episodes, find first event after previous episode's end
-        prev_episode_end = getattr(dataset, f"episode_{episode_num-1}_end_date")
-        min_gap_date = prev_episode_end + timedelta(days=EVENT_WINDOWS["min_episode_gap"])
-        later_events = pregnancy_events.where(
-            pregnancy_events.date > min_gap_date
-        )
-        episode_start = later_events.date.minimum_for_patient()
-    
-    setattr(dataset, f"episode_{episode_num}_start_date", episode_start)
-    
-    # Find first outcome after this episode's start
-    episode_outcomes = {}
-    for outcome_type, outcome_codelist in codelists.items():
-        if outcome_type in ["live_birth", "stillbirth", "miscarriage", "abortion", 
-                          "ectopic_pregnancy", "molar_pregnancy"]:
-            outcomes = clinical_events.where(
-                (clinical_events.snomedct_code.is_in(outcome_codelist)) &
-                (clinical_events.date > episode_start)
-            )
-            episode_outcomes[outcome_type] = outcomes.date.minimum_for_patient()
-    
-    # Determine the earliest outcome and its type
-    earliest_outcome_date = None
-    earliest_outcome_type = None
-    earliest_outcome_confidence = 0.0
-    
-    for outcome_type, outcome_date in episode_outcomes.items():
-        if outcome_date is not None:
-            # Calculate gestational age for this outcome
-            gestational_age = (outcome_date - episode_start).days
-            
-            # Get outcome-specific criteria
-            criteria = OUTCOME_SPECIFIC_CRITERIA[outcome_type]
-            
-            # Calculate confidence score for this outcome
-            outcome_confidence = criteria["weight"]
-            
-            # Check required events
-            for required_event in criteria["required_events"]:
-                event_date = getattr(dataset, f"{required_event}_date")
-                if event_date is not None and episode_start <= event_date <= outcome_date:
-                    outcome_confidence += EVENT_SEQUENCE_WEIGHTS[required_event]
-            
-            # Validate gestational age
-            if criteria["min_gestational_age"] <= gestational_age <= criteria["max_gestational_age"]:
-                outcome_confidence += 0.2
-            
-            # Check for conflicting outcomes
-            for other_type, other_date in episode_outcomes.items():
-                if other_type != outcome_type and other_date is not None:
-                    if abs((other_date - outcome_date).days) < 7:  # Within 7 days
-                        outcome_confidence -= 0.3  # Penalty for conflicting outcomes
-            
-            if earliest_outcome_date is None or outcome_confidence > earliest_outcome_confidence:
-                earliest_outcome_date = outcome_date
-                earliest_outcome_type = outcome_type
-                earliest_outcome_confidence = outcome_confidence
-    
-    # Set episode end date and type
-    if earliest_outcome_date is not None:
-        setattr(dataset, f"episode_{episode_num}_end_date", earliest_outcome_date)
-        setattr(dataset, f"episode_{episode_num}_outcome_type", earliest_outcome_type)
-        
-        # Calculate gestational age at outcome
-        gestational_age = (earliest_outcome_date - episode_start).days
-        setattr(dataset, f"episode_{episode_num}_gestational_age", gestational_age)
-        
-        # Create composite pregnancy episode identifier
-        setattr(dataset, f"episode_{episode_num}_pregnancy_episode_id", 
-                f"PREG_{episode_num}_{episode_start.strftime('%Y%m%d')}")
-        
-        # Set episode confidence and type
-        setattr(dataset, f"episode_{episode_num}_pregnancy_episode_confidence", 
-                min(earliest_outcome_confidence, 1.0))
-        
-        # Determine episode type based on confidence and gestational age
-        if earliest_outcome_confidence >= 0.8 and gestational_age >= 154:  # 22 weeks
-            episode_type = "confirmed"
-        elif earliest_outcome_confidence >= 0.5:
-            episode_type = "probable"
-        else:
-            episode_type = "possible"
-        
-        setattr(dataset, f"episode_{episode_num}_pregnancy_episode_type", episode_type)
-        
-        # Track identification sources
-        identification_sources = []
-        for event_type, weight in EVENT_SEQUENCE_WEIGHTS.items():
-            event_date = getattr(dataset, f"{event_type}_date")
-            if event_date is not None and episode_start <= event_date <= earliest_outcome_date:
-                identification_sources.append(event_type)
-        
-        setattr(dataset, f"episode_{episode_num}_pregnancy_episode_identification_source", 
-                identification_sources)
-        
-        # Track events within the episode
-        episode_end = earliest_outcome_date + timedelta(days=EVENT_WINDOWS["post_outcome_window"])
-        
-        # Track which events occurred during this episode
-        for event_type in codelists.keys():
-            events = clinical_events.where(
-                (clinical_events.snomedct_code.is_in(codelists[event_type])) &
-                (clinical_events.date >= episode_start) &
-                (clinical_events.date <= episode_end)
-            )
-            
-            # Set binary flag for event presence
-            setattr(dataset, f"episode_{episode_num}_had_{event_type}", 
-                   events.count_for_patient() > 0)
-            
-            # Set count of events
-            setattr(dataset, f"episode_{episode_num}_{event_type}_count", 
-                   events.count_for_patient())
-            
-            # Set first and last dates
-            if events.count_for_patient() > 0:
-                setattr(dataset, f"episode_{episode_num}_{event_type}_first_date", 
-                       events.date.minimum_for_patient())
-                setattr(dataset, f"episode_{episode_num}_{event_type}_last_date", 
-                       events.date.maximum_for_patient())
-                
-                # Calculate timing relative to outcome
-                first_date = events.date.minimum_for_patient()
-                last_date = events.date.maximum_for_patient()
-                days_before_outcome = (earliest_outcome_date - first_date).days
-                days_after_outcome = (last_date - earliest_outcome_date).days
-                
-                setattr(dataset, f"episode_{episode_num}_{event_type}_days_before_outcome", 
-                       days_before_outcome)
-                setattr(dataset, f"episode_{episode_num}_{event_type}_days_after_outcome", 
-                       days_after_outcome)
-                
-                # Track event frequency
-                if days_before_outcome > 0:
-                    frequency = events.count_for_patient() / (days_before_outcome / 30)  # events per month
-                    setattr(dataset, f"episode_{episode_num}_{event_type}_frequency", frequency)
-            
-            # For medications, track additional details
-            if event_type in ["antenatal_vitamins", "anti_emetics", "antihypertensives", 
-                            "antidiabetics", "antibiotics", "mental_health_meds", "pain_relief"]:
-                med_events = medications.where(
-                    (medications.dmd_code.is_in(codelists[event_type])) &
-                    (medications.date >= episode_start) &
-                    (medications.date <= episode_end)
-                )
-                
-                # Track medication details
-                setattr(dataset, f"episode_{episode_num}_{event_type}_doses", 
-                       med_events.quantity)
-                setattr(dataset, f"episode_{episode_num}_{event_type}_units", 
-                       med_events.unit)
-                
-                # Track medication timing
-                if med_events.count_for_patient() > 0:
-                    first_med_date = med_events.date.minimum_for_patient()
-                    last_med_date = med_events.date.maximum_for_patient()
-                    
-                    setattr(dataset, f"episode_{episode_num}_{event_type}_first_dose_date", 
-                           first_med_date)
-                    setattr(dataset, f"episode_{episode_num}_{event_type}_last_dose_date", 
-                           last_med_date)
-                    
-                    # Calculate medication duration
-                    med_duration = (last_med_date - first_med_date).days
-                    setattr(dataset, f"episode_{episode_num}_{event_type}_duration_days", 
-                           med_duration)
-                    
-                    # Calculate total medication quantity
-                    total_quantity = med_events.quantity.sum_for_patient()
-                    setattr(dataset, f"episode_{episode_num}_{event_type}_total_quantity", 
-                           total_quantity)
-        
-        # Track event relationships and patterns
-        # 1. Track conditions that occurred during the episode
-        conditions_during_episode = []
-        for condition in ["gestational_diabetes", "preeclampsia", "pregnancy_hypertension", 
-                         "hyperemesis", "pregnancy_infection", "pregnancy_bleeding", 
-                         "pregnancy_anemia", "pregnancy_thrombosis", "pregnancy_mental_health"]:
-            if getattr(dataset, f"episode_{episode_num}_had_{condition}"):
-                conditions_during_episode.append(condition)
-        
-        setattr(dataset, f"episode_{episode_num}_conditions_during_episode", 
-                conditions_during_episode)
-        
-        # 2. Track complications that occurred during the episode
-        complications_during_episode = []
-        for complication in ["postpartum_hemorrhage", "third_degree_tear", 
-                           "shoulder_dystocia", "placenta_previa", "placental_abruption"]:
-            if getattr(dataset, f"episode_{episode_num}_had_{complication}"):
-                complications_during_episode.append(complication)
-        
-        setattr(dataset, f"episode_{episode_num}_complications_during_episode", 
-                complications_during_episode)
-        
-        # 3. Track medications taken during the episode
-        medications_during_episode = []
-        for medication in ["antenatal_vitamins", "anti_emetics", "antihypertensives", 
-                          "antidiabetics", "antibiotics", "mental_health_meds", "pain_relief"]:
-            if getattr(dataset, f"episode_{episode_num}_had_{medication}"):
-                medications_during_episode.append(medication)
-        
-        setattr(dataset, f"episode_{episode_num}_medications_during_episode", 
-                medications_during_episode)
-        
-        # 4. Track delivery methods used
-        delivery_methods = []
-        for method in ["caesarean_section", "forceps_delivery", "vacuum_extraction", 
-                      "induction", "episiotomy"]:
-            if getattr(dataset, f"episode_{episode_num}_had_{method}"):
-                delivery_methods.append(method)
-        
-        setattr(dataset, f"episode_{episode_num}_delivery_methods", delivery_methods)
-        
-        # Add validation checks for event sequences
-        # 1. Check for logical event ordering
-        event_sequence_validations = []
-        
-        # Check booking visit follows pregnancy test
-        if (getattr(dataset, f"episode_{episode_num}_had_pregnancy_test") and 
-            getattr(dataset, f"episode_{episode_num}_had_booking_visit")):
-            test_date = getattr(dataset, f"episode_{episode_num}_pregnancy_test_first_date")
-            booking_date = getattr(dataset, f"episode_{episode_num}_booking_visit_first_date")
-            if booking_date < test_date:
-                event_sequence_validations.append("booking_visit_before_pregnancy_test")
-        
-        # Check dating scan follows booking visit
-        if (getattr(dataset, f"episode_{episode_num}_had_booking_visit") and 
-            getattr(dataset, f"episode_{episode_num}_had_dating_scan")):
-            booking_date = getattr(dataset, f"episode_{episode_num}_booking_visit_first_date")
-            scan_date = getattr(dataset, f"episode_{episode_num}_dating_scan_first_date")
-            if scan_date < booking_date:
-                event_sequence_validations.append("dating_scan_before_booking")
-        
-        # Check antenatal screening follows booking visit
-        if (getattr(dataset, f"episode_{episode_num}_had_booking_visit") and 
-            getattr(dataset, f"episode_{episode_num}_had_antenatal_screening")):
-            booking_date = getattr(dataset, f"episode_{episode_num}_booking_visit_first_date")
-            screening_date = getattr(dataset, f"episode_{episode_num}_antenatal_screening_first_date")
-            if screening_date < booking_date:
-                event_sequence_validations.append("screening_before_booking")
-        
-        # Check delivery methods are after booking visit
-        for method in ["caesarean_section", "forceps_delivery", "vacuum_extraction", 
-                      "induction", "episiotomy"]:
-            if (getattr(dataset, f"episode_{episode_num}_had_{method}") and 
-                getattr(dataset, f"episode_{episode_num}_had_booking_visit")):
-                booking_date = getattr(dataset, f"episode_{episode_num}_booking_visit_first_date")
-                method_date = getattr(dataset, f"episode_{episode_num}_{method}_first_date")
-                if method_date < booking_date:
-                    event_sequence_validations.append(f"{method}_before_booking")
-        
-        setattr(dataset, f"episode_{episode_num}_event_sequence_validations", 
-                event_sequence_validations)
-        
-        # 2. Check for clinical plausibility
-        clinical_validations = []
-        
-        # Check gestational age at first antenatal visit
-        if getattr(dataset, f"episode_{episode_num}_had_booking_visit"):
-            booking_date = getattr(dataset, f"episode_{episode_num}_booking_visit_first_date")
-            gestational_age = (booking_date - episode_start).days
-            if gestational_age > 84:  # More than 12 weeks
-                clinical_validations.append("late_booking_visit")
-        
-        # Check for appropriate medication timing
-        for medication in ["antihypertensives", "antidiabetics"]:
-            if getattr(dataset, f"episode_{episode_num}_had_{medication}"):
-                med_date = getattr(dataset, f"episode_{episode_num}_{medication}_first_date")
-                gestational_age = (med_date - episode_start).days
-                if gestational_age < 84:  # Before 12 weeks
-                    clinical_validations.append(f"early_{medication}")
-        
-        # Check for appropriate outcome timing
-        if earliest_outcome_type in ["live_birth", "stillbirth"]:
-            if gestational_age < 154:  # Before 22 weeks
-                clinical_validations.append("very_preterm_outcome")
-            elif gestational_age > 294:  # After 42 weeks
-                clinical_validations.append("post_term_outcome")
-        
-        setattr(dataset, f"episode_{episode_num}_clinical_validations", 
-                clinical_validations)
-        
-        # 3. Check for data completeness
-        completeness_validations = []
-        
-        # Check for missing key events
-        if not getattr(dataset, f"episode_{episode_num}_had_booking_visit"):
-            completeness_validations.append("missing_booking_visit")
-        if not getattr(dataset, f"episode_{episode_num}_had_dating_scan"):
-            completeness_validations.append("missing_dating_scan")
-        if not getattr(dataset, f"episode_{episode_num}_had_antenatal_screening"):
-            completeness_validations.append("missing_antenatal_screening")
-        
-        # Check for missing outcome information
-        if earliest_outcome_type in ["live_birth", "stillbirth"]:
-            if not any(getattr(dataset, f"episode_{episode_num}_had_{method}") 
-                      for method in ["caesarean_section", "forceps_delivery", "vacuum_extraction"]):
-                completeness_validations.append("missing_delivery_method")
-        
-        setattr(dataset, f"episode_{episode_num}_completeness_validations", 
-                completeness_validations)
-        
-        # --- 5. Track Episode Relationships and Outcomes ---
-        # 1. Track relationships between episodes
-        if episode_num > 1:
-            prev_episode_end = getattr(dataset, f"episode_{episode_num-1}_end_date")
-            gap_days = (episode_start - prev_episode_end).days
-            
-            setattr(dataset, f"episode_{episode_num}_days_since_previous_episode", 
-                   gap_days)
-            
-            # Check for short inter-pregnancy interval
-            if gap_days < 180:  # Less than 6 months
-                setattr(dataset, f"episode_{episode_num}_short_inter_pregnancy_interval", 
-                       True)
-            else:
-                setattr(dataset, f"episode_{episode_num}_short_inter_pregnancy_interval", 
-                       False)
-        
-        # 2. Track pregnancy outcomes
-        if earliest_outcome_type in ["live_birth", "stillbirth"]:
-            # Track delivery details
-            delivery_methods = getattr(dataset, f"episode_{episode_num}_delivery_methods")
-            setattr(dataset, f"episode_{episode_num}_delivery_method", 
-                   delivery_methods[0] if delivery_methods else "unknown")
-            
-            # Track complications
-            complications = getattr(dataset, f"episode_{episode_num}_complications_during_episode")
-            setattr(dataset, f"episode_{episode_num}_delivery_complications", 
-                   complications)
-            
-            # Track gestational age at delivery
-            setattr(dataset, f"episode_{episode_num}_gestational_age_at_delivery", 
-                   gestational_age)
-            
-            # Classify delivery timing
-            if gestational_age < 259:  # Before 37 weeks
-                delivery_timing = "preterm"
-            elif gestational_age > 294:  # After 42 weeks
-                delivery_timing = "post_term"
-            else:
-                delivery_timing = "term"
-            
-            setattr(dataset, f"episode_{episode_num}_delivery_timing", 
-                   delivery_timing)
-        
-        # 3. Track pregnancy conditions
-        conditions = getattr(dataset, f"episode_{episode_num}_conditions_during_episode")
-        setattr(dataset, f"episode_{episode_num}_pregnancy_conditions", 
-               conditions)
-        
-        # 4. Track medication patterns
-        medications = getattr(dataset, f"episode_{episode_num}_medications_during_episode")
-        setattr(dataset, f"episode_{episode_num}_medication_pattern", 
-               medications)
-        
-        # 5. Calculate episode summary statistics
-        setattr(dataset, f"episode_{episode_num}_total_antenatal_visits", 
-               sum(1 for event in ["booking_visit", "antenatal_screening", "antenatal_risk"] 
-                   if getattr(dataset, f"episode_{episode_num}_had_{event}")))
-        
-        setattr(dataset, f"episode_{episode_num}_total_conditions", 
-               len(conditions))
-        
-        setattr(dataset, f"episode_{episode_num}_total_complications", 
-               len(complications_during_episode))
-        
-        setattr(dataset, f"episode_{episode_num}_total_medications", 
-               len(medications_during_episode))
-        
-    else:
-        # If no outcome found, use maximum window
-        max_window = max(PREGNANCY_WINDOWS.values())
-        setattr(dataset, f"episode_{episode_num}_end_date", 
-                episode_start + timedelta(days=max_window))
-        setattr(dataset, f"episode_{episode_num}_outcome_type", "unknown")
-        setattr(dataset, f"episode_{episode_num}_gestational_age", max_window)
-        setattr(dataset, f"episode_{episode_num}_pregnancy_episode_id", 
-                f"PREG_{episode_num}_{episode_start.strftime('%Y%m%d')}")
-        setattr(dataset, f"episode_{episode_num}_pregnancy_episode_confidence", 0.0)
-        setattr(dataset, f"episode_{episode_num}_pregnancy_episode_type", "possible")
-        setattr(dataset, f"episode_{episode_num}_pregnancy_episode_identification_source", [])
+previous_episode_end = None
+episodes = []
 
-# --- 6. Configure Dummy Data for Testing ---
+for episode_num in range(1, 6):
+    # Initialize episode data
+    episode_data = {
+        "number": episode_num,
+        "events": {},
+        "outcomes": {},
+        "start_date": None,
+        "end_date": None,
+        "confidence": 0.0,
+        "type": "unknown",
+        "quality_issues": []
+    }
+    
+    # Collect all events for this episode
+    for event_type, codelist in codelists.items():
+        if event_type in EPISODE_IDENTIFICATION["primary_indicators"] or \
+           event_type in EPISODE_IDENTIFICATION["secondary_indicators"]:
+            events = clinical_events.where(
+                (clinical_events.snomedct_code.is_in(codelist)) &
+                (clinical_events.date > previous_episode_end if previous_episode_end else True)
+            )
+            if events.count_for_patient() > 0:
+                episode_data["events"][event_type] = events.date.minimum_for_patient()
+    
+    # Collect all outcomes for this episode
+    for outcome_type, codelist in codelists.items():
+        if outcome_type in EPISODE_IDENTIFICATION["outcome_indicators"]:
+            outcomes = clinical_events.where(
+                (clinical_events.snomedct_code.is_in(codelist)) &
+                (clinical_events.date > previous_episode_end if previous_episode_end else True)
+            )
+            if outcomes.count_for_patient() > 0:
+                episode_data["outcomes"][outcome_type] = outcomes.date.minimum_for_patient()
+    
+    # Identify episode start and end
+    episode_data["start_date"] = identify_episode_start(episode_data["events"], previous_episode_end)
+    if episode_data["start_date"]:
+        episode_data["end_date"] = identify_episode_end(
+            episode_data["events"],
+            episode_data["start_date"],
+            episode_data["outcomes"]
+        )
+    
+    # Calculate episode confidence
+    if episode_data["start_date"] and episode_data["end_date"]:
+        episode_data["confidence"] = calculate_episode_confidence(
+            episode_data["events"],
+            episode_data["outcomes"],
+            episode_data["start_date"],
+            episode_data["end_date"]
+        )
+        
+        # Determine episode type
+        if episode_data["confidence"] >= 0.8:
+            episode_data["type"] = "confirmed"
+        elif episode_data["confidence"] >= 0.6:
+            episode_data["type"] = "probable"
+        else:
+            episode_data["type"] = "possible"
+    
+    # Add episode to list if valid
+    if episode_data["start_date"] and episode_data["end_date"]:
+        episodes.append(episode_data)
+        previous_episode_end = episode_data["end_date"]
+    
+    # Set episode variables
+    if episode_data["start_date"]:
+        setattr(dataset, f"episode_{episode_num}_start_date", episode_data["start_date"])
+        setattr(dataset, f"episode_{episode_num}_end_date", episode_data["end_date"])
+        setattr(dataset, f"episode_{episode_num}_pregnancy_episode_confidence", episode_data["confidence"])
+        setattr(dataset, f"episode_{episode_num}_pregnancy_episode_type", episode_data["type"])
+        
+        # Set event dates
+        for event_type, date in episode_data["events"].items():
+            setattr(dataset, f"episode_{episode_num}_{event_type}_date", date)
+        
+        # Set outcome dates
+        for outcome_type, date in episode_data["outcomes"].items():
+            setattr(dataset, f"episode_{episode_num}_{outcome_type}_date", date)
+        
+        # Set quality issues
+        setattr(dataset, f"episode_{episode_num}_data_quality_issues", episode_data["quality_issues"])
+        
+        # Calculate and set data quality score
+        severity_weights = {"high": 1.0, "medium": 0.5, "low": 0.25}
+        data_quality_score = 1.0
+        for issue in episode_data["quality_issues"]:
+            data_quality_score -= severity_weights[issue["severity"]] * 0.1
+        data_quality_score = max(0.0, min(data_quality_score, 1.0))
+        setattr(dataset, f"episode_{episode_num}_data_quality_score", data_quality_score)
+    
+    # Validate episode sequence
+    if not validate_episode_sequence(episodes):
+        # If sequence is invalid, remove the last episode
+        if episodes:
+            episodes.pop()
+            previous_episode_end = episodes[-1]["end_date"] if episodes else None
+
+# Update episode processing to include enhanced data quality reporting
+for episode_num in range(1, 6):
+    # ... existing episode initialization code ...
+    
+    if episode_data["start_date"] and episode_data["end_date"]:
+        # Generate quality report
+        quality_report = generate_quality_report(episode_data)
+        
+        # Update episode data with quality information
+        episode_data["quality_report"] = quality_report
+        
+        # Set quality variables
+        setattr(dataset, f"episode_{episode_num}_quality_score", quality_report["quality_score"])
+        setattr(dataset, f"episode_{episode_num}_completeness_score", quality_report["completeness"]["score"])
+        setattr(dataset, f"episode_{episode_num}_consistency_score", quality_report["consistency"]["score"])
+        setattr(dataset, f"episode_{episode_num}_plausibility_score", quality_report["plausibility"]["score"])
+        setattr(dataset, f"episode_{episode_num}_validation_score", quality_report["validation"]["score"])
+        
+        # Set quality issues
+        setattr(dataset, f"episode_{episode_num}_critical_issues", quality_report["summary"]["critical_issues"])
+        setattr(dataset, f"episode_{episode_num}_high_priority_issues", quality_report["summary"]["high_priority_issues"])
+        setattr(dataset, f"episode_{episode_num}_medium_priority_issues", quality_report["summary"]["medium_priority_issues"])
+        setattr(dataset, f"episode_{episode_num}_low_priority_issues", quality_report["summary"]["low_priority_issues"])
+
+# Generate dataset quality summary
+dataset_quality_summary = generate_dataset_quality_summary(episodes)
+
+# Set dataset quality variables
+dataset.quality_summary = dataset_quality_summary
+dataset.quality_scores = dataset_quality_summary["quality_scores"]
+dataset.common_issues = dataset_quality_summary["common_issues"]
+dataset.completeness_issues = dataset_quality_summary["completeness"]
+dataset.consistency_issues = dataset_quality_summary["consistency"]
+dataset.plausibility_issues = dataset_quality_summary["plausibility"]
+
+# --- 5. Configure Dummy Data for Testing ---
 dataset.configure_dummy_data(population_size=2000)
