@@ -11,6 +11,28 @@ codelist_files = {
     "live_birth": "codelists/local/B1_live_birth.csv",
     "stillbirth": "codelists/local/B2_stillbirth.csv",
     
+    # Pregnancy-related conditions (used for episode identification)
+    "gestational_diabetes": "codelists/local/C1_gestational_diabetes.csv",
+    "pregnancy_hypertension": "codelists/local/C2_pregnancy_hypertension.csv",
+    "preeclampsia": "codelists/local/C3_preeclampsia.csv",
+    "hyperemesis": "codelists/local/C4_hyperemesis.csv",
+    "pregnancy_infection": "codelists/local/C5_pregnancy_infection.csv",
+    "pregnancy_bleeding": "codelists/local/C6_pregnancy_bleeding.csv",
+    "pregnancy_anemia": "codelists/local/C7_pregnancy_anemia.csv",
+    "pregnancy_thrombosis": "codelists/local/C8_pregnancy_thrombosis.csv",
+    "pregnancy_mental_health": "codelists/local/C9_pregnancy_mental_health.csv",
+    "pregnancy_thyroid": "codelists/local/C10_pregnancy_thyroid.csv",
+    "pregnancy_asthma": "codelists/local/C11_pregnancy_asthma.csv",
+    "pregnancy_epilepsy": "codelists/local/C12_pregnancy_epilepsy.csv",
+    "pregnancy_heart_disease": "codelists/local/C13_pregnancy_heart_disease.csv",
+    "pregnancy_kidney_disease": "codelists/local/C14_pregnancy_kidney_disease.csv",
+    "pregnancy_liver_disease": "codelists/local/C15_pregnancy_liver_disease.csv",
+    "pregnancy_autoimmune": "codelists/local/C16_pregnancy_autoimmune.csv",
+    "pregnancy_obesity": "codelists/local/C17_pregnancy_obesity.csv",
+    "pregnancy_smoking": "codelists/local/C18_pregnancy_smoking.csv",
+    "pregnancy_alcohol": "codelists/local/C19_pregnancy_alcohol.csv",
+    "pregnancy_drug_use": "codelists/local/C20_pregnancy_drug_use.csv",
+    
     # Detailed pregnancy outcome codelists
     "incomplete_abortion": "codelists/local/F1_incomplete_abortion.csv",
     "threatened_abortion": "codelists/local/F2_threatened_abortion.csv",
@@ -81,50 +103,139 @@ PREGNANCY_WINDOWS = {
     "stillbirth": 280,  # 40 weeks
 }
 
-# Get all antenatal and outcome dates
+# Define weights for different types of pregnancy indicators
+PREGNANCY_INDICATOR_WEIGHTS = {
+    # High confidence indicators (weight = 1.0)
+    "antenatal_screening": 1.0,
+    "antenatal_risk": 1.0,
+    "antenatal_procedures": 1.0,
+    
+    # Moderate confidence indicators (weight = 0.8)
+    "gestational_diabetes": 0.8,
+    "preeclampsia": 0.8,
+    "hyperemesis": 0.8,
+    "pregnancy_hypertension": 0.8,
+    
+    # Lower confidence indicators (weight = 0.6)
+    "pregnancy_infection": 0.6,
+    "pregnancy_bleeding": 0.6,
+    "pregnancy_anemia": 0.6,
+    "pregnancy_thrombosis": 0.6,
+    "pregnancy_mental_health": 0.6,
+    "pregnancy_thyroid": 0.6,
+    "pregnancy_asthma": 0.6,
+    "pregnancy_epilepsy": 0.6,
+    "pregnancy_heart_disease": 0.6,
+    "pregnancy_kidney_disease": 0.6,
+    "pregnancy_liver_disease": 0.6,
+    "pregnancy_autoimmune": 0.6,
+    
+    # Lifestyle indicators (weight = 0.4)
+    "pregnancy_obesity": 0.4,
+    "pregnancy_smoking": 0.4,
+    "pregnancy_alcohol": 0.4,
+    "pregnancy_drug_use": 0.4
+}
+
+# Get all potential pregnancy indicator events
 antenatal_codes = (
     codelists["antenatal_screening"] +
     codelists["antenatal_risk"] +
     codelists["antenatal_procedures"]
 )
 
-outcome_codes = {
-    "live_birth": codelists["live_birth"],
-    "stillbirth": codelists["stillbirth"],
-    "incomplete_abortion": codelists["incomplete_abortion"],
-    "threatened_abortion": codelists["threatened_abortion"],
-    "complete_miscarriage": codelists["complete_miscarriage"],
-    "blighted_ovum": codelists["blighted_ovum"],
-    "chemical_pregnancy": codelists["chemical_pregnancy"],
-    "missed_miscarriage": codelists["missed_miscarriage"],
-    "inevitable_miscarriage": codelists["inevitable_miscarriage"],
-    "recurrent_miscarriage": codelists["recurrent_miscarriage"],
-    "ectopic_pregnancy": codelists["ectopic_pregnancy"],
-    "molar_pregnancy": codelists["molar_pregnancy"],
-    "early_miscarriage": codelists["early_miscarriage"],
-    "late_miscarriage": codelists["late_miscarriage"],
-    "missed_silent_miscarriage": codelists["missed_silent_miscarriage"]
-}
+pregnancy_condition_codes = (
+    codelists["gestational_diabetes"] +
+    codelists["pregnancy_hypertension"] +
+    codelists["preeclampsia"] +
+    codelists["hyperemesis"] +
+    codelists["pregnancy_infection"] +
+    codelists["pregnancy_bleeding"] +
+    codelists["pregnancy_anemia"] +
+    codelists["pregnancy_thrombosis"] +
+    codelists["pregnancy_mental_health"] +
+    codelists["pregnancy_thyroid"] +
+    codelists["pregnancy_asthma"] +
+    codelists["pregnancy_epilepsy"] +
+    codelists["pregnancy_heart_disease"] +
+    codelists["pregnancy_kidney_disease"] +
+    codelists["pregnancy_liver_disease"] +
+    codelists["pregnancy_autoimmune"] +
+    codelists["pregnancy_obesity"] +
+    codelists["pregnancy_smoking"] +
+    codelists["pregnancy_alcohol"] +
+    codelists["pregnancy_drug_use"]
+)
 
 # Get all events for each type
 antenatal_events = clinical_events.where(
     clinical_events.snomedct_code.is_in(antenatal_codes)
 )
 
+pregnancy_condition_events = clinical_events.where(
+    clinical_events.snomedct_code.is_in(pregnancy_condition_codes)
+)
+
 # Create episode-level variables for up to 5 episodes per patient
 for episode_num in range(1, 6):
-    # For first episode, use earliest antenatal date
+    # For first episode, use earliest of antenatal date or pregnancy condition date
     if episode_num == 1:
-        episode_start = antenatal_events.date.minimum_for_patient()
+        antenatal_start = antenatal_events.date.minimum_for_patient()
+        condition_start = pregnancy_condition_events.date.minimum_for_patient()
+        
+        # Determine which source to use based on weights
+        if antenatal_start is not None and condition_start is not None:
+            # If both exist, use the one with higher weight
+            antenatal_weight = PREGNANCY_INDICATOR_WEIGHTS["antenatal_screening"]
+            condition_weight = PREGNANCY_INDICATOR_WEIGHTS["gestational_diabetes"]  # Default to moderate weight
+            episode_start = antenatal_start if antenatal_weight >= condition_weight else condition_start
+            setattr(dataset, f"episode_{episode_num}_identification_source", 
+                   "antenatal" if antenatal_weight >= condition_weight else "condition")
+        else:
+            # If only one exists, use that
+            episode_start = antenatal_start if antenatal_start is not None else condition_start
+            setattr(dataset, f"episode_{episode_num}_identification_source", 
+                   "antenatal" if antenatal_start is not None else "condition")
     else:
-        # For subsequent episodes, find first antenatal date after previous episode's end
+        # For subsequent episodes, find first event after previous episode's end
         prev_episode_end = getattr(dataset, f"episode_{episode_num-1}_end_date")
         later_antenatal = antenatal_events.where(
             antenatal_events.date > prev_episode_end
         )
-        episode_start = later_antenatal.date.minimum_for_patient()
+        later_condition = pregnancy_condition_events.where(
+            pregnancy_condition_events.date > prev_episode_end
+        )
+        antenatal_start = later_antenatal.date.minimum_for_patient()
+        condition_start = later_condition.date.minimum_for_patient()
+        
+        # Determine which source to use based on weights
+        if antenatal_start is not None and condition_start is not None:
+            antenatal_weight = PREGNANCY_INDICATOR_WEIGHTS["antenatal_screening"]
+            condition_weight = PREGNANCY_INDICATOR_WEIGHTS["gestational_diabetes"]
+            episode_start = antenatal_start if antenatal_weight >= condition_weight else condition_start
+            setattr(dataset, f"episode_{episode_num}_identification_source", 
+                   "antenatal" if antenatal_weight >= condition_weight else "condition")
+        else:
+            episode_start = antenatal_start if antenatal_start is not None else condition_start
+            setattr(dataset, f"episode_{episode_num}_identification_source", 
+                   "antenatal" if antenatal_start is not None else "condition")
     
     setattr(dataset, f"episode_{episode_num}_start_date", episode_start)
+    
+    # Track which conditions were present during this episode
+    for condition_name in PREGNANCY_INDICATOR_WEIGHTS.keys():
+        if condition_name in codelists:
+            condition_events = clinical_events.where(
+                (clinical_events.snomedct_code.is_in(codelists[condition_name])) &
+                (clinical_events.date >= episode_start) &
+                (clinical_events.date <= getattr(dataset, f"episode_{episode_num}_end_date"))
+            )
+            setattr(dataset, f"episode_{episode_num}_{condition_name}_present", 
+                   condition_events.count_for_patient() > 0)
+            setattr(dataset, f"episode_{episode_num}_{condition_name}_count", 
+                   condition_events.count_for_patient())
+            setattr(dataset, f"episode_{episode_num}_{condition_name}_first_date", 
+                   condition_events.date.minimum_for_patient())
     
     # Find first outcome after this episode's start
     episode_outcomes = {}
