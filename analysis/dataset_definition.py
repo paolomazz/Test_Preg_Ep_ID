@@ -59,44 +59,14 @@ codelist_files = {
     "placental_abruption": "codelists/Local/F5_placental_abruption.csv",
 }
 
-def read_csv_with_encoding(file_path):
-    """Read CSV file with appropriate encoding."""
-    try:
-        # Try UTF-8 first
-        with open(file_path, 'r', encoding='utf-8') as f:
-            return f.read()
-    except UnicodeDecodeError:
-        # Try latin-1 if UTF-8 fails
-        with open(file_path, 'r', encoding='latin-1') as f:
-            return f.read()
-
-# Load codelists with error handling for different encodings
+# Load codelists
 codelists = {}
-temp_files = []  # Keep track of temporary files to clean up later
-
 for k, v in codelist_files.items():
     try:
-        # Read the file content with appropriate encoding
-        content = read_csv_with_encoding(v)
-        
-        # Create a temporary file with UTF-8 encoding
-        temp_file = tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', suffix='.csv', delete=False)
-        temp_file.write(content)
-        temp_file.close()
-        temp_files.append(temp_file.name)
-        
-        # Use codelist_from_csv with the temporary file path
-        codelists[k] = codelist_from_csv(temp_file.name, column="code")
+        codelists[k] = codelist_from_csv(v, column="code")
     except Exception as e:
         print(f"Error loading codelist {k} from {v}: {str(e)}")
         raise
-
-# Clean up temporary files
-for temp_file in temp_files:
-    try:
-        os.unlink(temp_file)
-    except Exception as e:
-        print(f"Warning: Could not delete temporary file {temp_file}: {str(e)}")
 
 # Define validation windows and criteria
 GESTATIONAL_AGE_WINDOWS = {
