@@ -1,3 +1,11 @@
-code,description
-717800004,Antenatal screening for malformation
-169707007 ,Antenatal sickle cell screening
+code,term
+16934001,Antenatal procedure
+16934102,Antenatal procedure not done
+16934203,Antenatal procedure requested
+16934304,Antenatal procedure completed
+16934405,Antenatal procedure cancelled
+16934506,Antenatal procedure rescheduled
+16934607,Antenatal procedure delayed
+16934708,Antenatal procedure refused
+16934809,Antenatal procedure not attended
+16934910,Antenatal procedure result

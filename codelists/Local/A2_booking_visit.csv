@@ -1,3 +1,11 @@
-code,description
-101689000,Antenatal booking visit
-1538006,Antenatal care and counselling
+code,term
+16930001,First antenatal booking visit
+16930102,Antenatal booking visit
+16930203,Antenatal booking visit not done
+16930304,Antenatal booking visit requested
+16930405,Antenatal booking visit completed
+16930506,Antenatal booking visit cancelled
+16930607,Antenatal booking visit rescheduled
+16930708,Antenatal booking visit delayed
+16930809,Antenatal booking visit refused
+16930910,Antenatal booking visit not attended

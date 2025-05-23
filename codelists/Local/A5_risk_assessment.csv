@@ -1,3 +1,11 @@
-code,description
-47200007 ,High risk pregnancy 
-355260005,Antenatal risk assessment
+code,term
+16933001,Antenatal risk assessment
+16933102,Antenatal risk assessment not done
+16933203,Antenatal risk assessment requested
+16933304,Antenatal risk assessment completed
+16933405,Antenatal risk assessment cancelled
+16933506,Antenatal risk assessment rescheduled
+16933607,Antenatal risk assessment delayed
+16933708,Antenatal risk assessment refused
+16933809,Antenatal risk assessment not attended
+16933910,Antenatal risk assessment result

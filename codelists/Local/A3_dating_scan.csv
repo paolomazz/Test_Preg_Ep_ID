@@ -1,3 +1,11 @@
-code,description
-119768005,Pregnancy scan 
-,
+code,term
+16931001,Dating scan
+16931102,Dating scan not done
+16931203,Dating scan requested
+16931304,Dating scan completed
+16931405,Dating scan cancelled
+16931506,Dating scan rescheduled
+16931607,Dating scan delayed
+16931708,Dating scan refused
+16931809,Dating scan not attended
+16931910,Dating scan result

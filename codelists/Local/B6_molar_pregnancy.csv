@@ -1,4 +1,11 @@
-code,description
-417044008,molar pregnancy
-,
-,
+code,term
+16940001,Molar pregnancy
+16940102,Molar pregnancy not done
+16940203,Molar pregnancy requested
+16940304,Molar pregnancy completed
+16940405,Molar pregnancy cancelled
+16940506,Molar pregnancy rescheduled
+16940607,Molar pregnancy delayed
+16940708,Molar pregnancy refused
+16940809,Molar pregnancy not attended
+16940910,Molar pregnancy result

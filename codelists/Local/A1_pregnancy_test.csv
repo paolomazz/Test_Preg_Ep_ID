@@ -1,3 +1,11 @@
-code,description
-250421003,Pregnancy test finding
-74036000,Pregnancy test examination
+code,term
+16929003,Pregnancy test positive
+16929104,Pregnancy test negative
+16929205,Pregnancy test inconclusive
+16929306,Pregnancy test not done
+16929407,Pregnancy test requested
+16929508,Pregnancy test result
+16929609,Pregnancy test kit issued
+16929710,Pregnancy test kit used
+16929811,Pregnancy test kit returned
+16929912,Pregnancy test kit expired

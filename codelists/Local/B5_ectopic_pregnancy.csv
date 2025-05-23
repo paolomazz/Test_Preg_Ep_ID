@@ -1,4 +1,11 @@
-code,description
-34801009,ectopic pregnancy
-,
-,
+code,term
+16939001,Ectopic pregnancy
+16939102,Ectopic pregnancy not done
+16939203,Ectopic pregnancy requested
+16939304,Ectopic pregnancy completed
+16939405,Ectopic pregnancy cancelled
+16939506,Ectopic pregnancy rescheduled
+16939607,Ectopic pregnancy delayed
+16939708,Ectopic pregnancy refused
+16939809,Ectopic pregnancy not attended
+16939910,Ectopic pregnancy result

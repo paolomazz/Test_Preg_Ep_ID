@@ -1,4 +1,11 @@
-code,description
-6261000119104,Induced abortion first trimester
-237245006 ,Induced abortion second trimester
-386639001 ,Termination of pregnancy
+code,term
+16938001,Abortion
+16938102,Abortion not done
+16938203,Abortion requested
+16938304,Abortion completed
+16938405,Abortion cancelled
+16938506,Abortion rescheduled
+16938607,Abortion delayed
+16938708,Abortion refused
+16938809,Abortion not attended
+16938910,Abortion result

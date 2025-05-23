@@ -1,3 +1,11 @@
-code,description
-1013971000000100,Antenatal screening 
-,
+code,term
+16932001,Antenatal screening
+16932102,Antenatal screening not done
+16932203,Antenatal screening requested
+16932304,Antenatal screening completed
+16932405,Antenatal screening cancelled
+16932506,Antenatal screening rescheduled
+16932607,Antenatal screening delayed
+16932708,Antenatal screening refused
+16932809,Antenatal screening not attended
+16932910,Antenatal screening result
