@@ -1,3 +1,11 @@
-code,description
-237364002,Stillbirth 
-161743003,H/O Stillbirth
+code,term
+16936001,Stillbirth
+16936102,Stillbirth not done
+16936203,Stillbirth requested
+16936304,Stillbirth completed
+16936405,Stillbirth cancelled
+16936506,Stillbirth rescheduled
+16936607,Stillbirth delayed
+16936708,Stillbirth refused
+16936809,Stillbirth not attended
+16936910,Stillbirth result

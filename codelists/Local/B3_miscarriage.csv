@@ -1,3 +1,11 @@
-code,description
-447562003,Miscarriage
-,
+code,term
+16937001,Miscarriage
+16937102,Miscarriage not done
+16937203,Miscarriage requested
+16937304,Miscarriage completed
+16937405,Miscarriage cancelled
+16937506,Miscarriage rescheduled
+16937607,Miscarriage delayed
+16937708,Miscarriage refused
+16937809,Miscarriage not attended
+16937910,Miscarriage result

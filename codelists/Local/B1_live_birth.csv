@@ -1,3 +1,11 @@
-code,description
-281050002,Livebirth
-177184002,Normal delivery
+code,term
+16935001,Live birth
+16935102,Live birth not done
+16935203,Live birth requested
+16935304,Live birth completed
+16935405,Live birth cancelled
+16935506,Live birth rescheduled
+16935607,Live birth delayed
+16935708,Live birth refused
+16935809,Live birth not attended
+16935910,Live birth result
