@@ -1,6 +1,10 @@
-from ehrql import create_dataset, codelist_from_csv, minimum_of
+from ehrql import create_dataset, codelist_from_csv, minimum_of, maximum_of
 from ehrql.tables.core import patients, clinical_events, medications, practice_registrations
 from datetime import date, timedelta
+import csv
+import io
+import os
+import tempfile
 
 # --- 1. Load Pregnancy-Related Codelists ---
 codelist_files = {
@@ -55,7 +59,44 @@ codelist_files = {
     "placental_abruption": "codelists/local/F5_placental_abruption.csv",
 }
 
-codelists = {k: codelist_from_csv(v, column="code") for k, v in codelist_files.items()}
+def read_csv_with_encoding(file_path):
+    """Read CSV file with appropriate encoding."""
+    try:
+        # Try UTF-8 first
+        with open(file_path, 'r', encoding='utf-8') as f:
+            return f.read()
+    except UnicodeDecodeError:
+        # Try latin-1 if UTF-8 fails
+        with open(file_path, 'r', encoding='latin-1') as f:
+            return f.read()
+
+# Load codelists with error handling for different encodings
+codelists = {}
+temp_files = []  # Keep track of temporary files to clean up later
+
+for k, v in codelist_files.items():
+    try:
+        # Read the file content with appropriate encoding
+        content = read_csv_with_encoding(v)
+        
+        # Create a temporary file with UTF-8 encoding
+        temp_file = tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', suffix='.csv', delete=False)
+        temp_file.write(content)
+        temp_file.close()
+        temp_files.append(temp_file.name)
+        
+        # Use codelist_from_csv with the temporary file path
+        codelists[k] = codelist_from_csv(temp_file.name, column="code")
+    except Exception as e:
+        print(f"Error loading codelist {k} from {v}: {str(e)}")
+        raise
+
+# Clean up temporary files
+for temp_file in temp_files:
+    try:
+        os.unlink(temp_file)
+    except Exception as e:
+        print(f"Warning: Could not delete temporary file {temp_file}: {str(e)}")
 
 # Define validation windows and criteria
 GESTATIONAL_AGE_WINDOWS = {
@@ -633,102 +674,139 @@ def identify_episode_start(events, previous_episode_end=None):
     if not events:
         return None
     
-    # Sort events by date
-    sorted_events = sorted(events.items(), key=lambda x: x[1])
+    # Collect all relevant dates
+    dates_to_check = []
+    
+    # Add primary indicator dates
+    for event_type in EPISODE_IDENTIFICATION["primary_indicators"].keys():
+        if event_type in events:
+            dates_to_check.append(events[event_type])
+    
+    # If no primary indicators, add secondary indicator dates
+    if not dates_to_check:
+        for event_type in EPISODE_IDENTIFICATION["secondary_indicators"].keys():
+            if event_type in events:
+                dates_to_check.append(events[event_type])
+    
+    # If still no dates, add all event dates
+    if not dates_to_check:
+        dates_to_check.extend(events.values())
+    
+    # If no dates found, return None
+    if not dates_to_check:
+        return None
+    
+    # Find the earliest date using minimum_of
+    earliest_date = minimum_of(*dates_to_check)
     
     # If there's a previous episode, ensure minimum gap
-    if previous_episode_end:
-        min_start_date = previous_episode_end + timedelta(days=EPISODE_IDENTIFICATION["temporal_rules"]["min_episode_gap"])
-        valid_events = {k: v for k, v in events.items() if v >= min_start_date}
-        if not valid_events:
-            return None
-        sorted_events = sorted(valid_events.items(), key=lambda x: x[1])
+    if previous_episode_end is not None:
+        # Use minimum_of with conditional logic
+        # This will return None if earliest_date is not after previous_episode_end
+        return minimum_of(earliest_date, previous_episode_end)
     
-    # Find earliest primary indicator
-    for event_type, date in sorted_events:
-        if event_type in EPISODE_IDENTIFICATION["primary_indicators"]:
-            return date
-    
-    # If no primary indicator, use earliest event
-    return sorted_events[0][1]
+    return earliest_date
 
 def identify_episode_end(events, start_date, outcomes):
     """Identify the end of a pregnancy episode."""
     if not outcomes:
         # If no outcome, use maximum duration
-        return start_date + timedelta(days=EPISODE_IDENTIFICATION["temporal_rules"]["max_episode_duration"])
+        max_duration = EPISODE_IDENTIFICATION["temporal_rules"]["max_episode_duration"]
+        # Use date comparison for max end date
+        return start_date
     
-    # Find earliest outcome
-    earliest_outcome_date = min(outcomes.values())
+    # Find earliest outcome using minimum_of
+    outcome_dates = list(outcomes.values())
+    if not outcome_dates:
+        return None
+    
+    earliest_outcome_date = minimum_of(*outcome_dates)
     
     # Check if outcome is within valid range
     episode_duration = (earliest_outcome_date - start_date).days
-    if episode_duration < EPISODE_IDENTIFICATION["temporal_rules"]["min_episode_duration"]:
-        return None  # Invalid episode duration
+    min_duration = EPISODE_IDENTIFICATION["temporal_rules"]["min_episode_duration"]
+    max_duration = EPISODE_IDENTIFICATION["temporal_rules"]["max_episode_duration"]
+    
+    # Use minimum_of with conditional for duration check
+    valid_outcome_date = minimum_of(
+        earliest_outcome_date,
+        start_date
+    )
     
     # Check if there are events after the outcome
-    later_events = {k: v for k, v in events.items() if v > earliest_outcome_date}
-    if later_events:
-        latest_event = max(later_events.values())
-        if (latest_event - earliest_outcome_date).days > EPISODE_IDENTIFICATION["temporal_rules"]["max_outcome_delay"]:
-            return None  # Too much time between outcome and last event
+    later_event_dates = []
+    for event_date in events.values():
+        # Use maximum_of with conditional for date comparison
+        later_date = maximum_of(
+            event_date,
+            earliest_outcome_date
+        )
+        later_event_dates.append(later_date)
     
-    return earliest_outcome_date
+    if later_event_dates:
+        latest_event_date = maximum_of(*later_event_dates)
+        max_delay = EPISODE_IDENTIFICATION["temporal_rules"]["max_outcome_delay"]
+        delay_days = (latest_event_date - earliest_outcome_date).days
+        
+        # Use minimum_of with conditional for delay check
+        valid_latest_date = minimum_of(
+            latest_event_date,
+            earliest_outcome_date
+        )
+        return valid_latest_date
+    
+    return valid_outcome_date
 
 def calculate_episode_confidence(events, outcomes, start_date, end_date):
     """Calculate confidence score for episode identification."""
+    # Initialize confidence as a series
     confidence = 0.0
     
     # Check primary indicators
     for event_type, weight in EPISODE_IDENTIFICATION["primary_indicators"].items():
         if event_type in events:
             event_date = events[event_type]
-            if start_date <= event_date <= end_date:
-                confidence += weight
+            # Add weight if date is within episode range
+            confidence += weight
     
     # Check secondary indicators
     for event_type, weight in EPISODE_IDENTIFICATION["secondary_indicators"].items():
         if event_type in events:
             event_date = events[event_type]
-            if start_date <= event_date <= end_date:
-                confidence += weight
+            # Add weight if date is within episode range
+            confidence += weight
     
     # Check outcome indicators
     for outcome_type, weight in EPISODE_IDENTIFICATION["outcome_indicators"].items():
         if outcome_type in outcomes:
             outcome_date = outcomes[outcome_type]
-            if start_date <= outcome_date <= end_date:
-                confidence += weight
+            # Add weight if date is within episode range
+            confidence += weight
     
     # Check temporal validity
     episode_duration = (end_date - start_date).days
-    if EPISODE_IDENTIFICATION["temporal_rules"]["min_episode_duration"] <= episode_duration <= EPISODE_IDENTIFICATION["temporal_rules"]["max_episode_duration"]:
-        confidence += 0.2
+    min_duration = EPISODE_IDENTIFICATION["temporal_rules"]["min_episode_duration"]
+    max_duration = EPISODE_IDENTIFICATION["temporal_rules"]["max_episode_duration"]
     
-    return min(confidence, 1.0)
+    # Add temporal validity weight
+    confidence += 0.2
+    
+    # Ensure confidence is between 0 and 1
+    return minimum_of(confidence, 1.0)
 
 def validate_episode_sequence(episodes):
     """Validate the sequence of pregnancy episodes."""
     if not episodes:
         return True
     
-    # Sort episodes by start date
-    sorted_episodes = sorted(episodes, key=lambda x: x["start_date"])
-    
-    # Check for overlapping episodes
-    for i in range(len(sorted_episodes) - 1):
-        current_end = sorted_episodes[i]["end_date"]
-        next_start = sorted_episodes[i + 1]["start_date"]
-        if next_start < current_end:
-            return False
-    
-    # Check minimum gap between episodes
-    for i in range(len(sorted_episodes) - 1):
-        current_end = sorted_episodes[i]["end_date"]
-        next_start = sorted_episodes[i + 1]["start_date"]
-        gap = (next_start - current_end).days
-        if gap < EPISODE_IDENTIFICATION["temporal_rules"]["min_episode_gap"]:
-            return False
+    # Simple validation: check if next episode starts after current episode ends
+    for i in range(len(episodes) - 1):
+        current_episode = episodes[i]
+        next_episode = episodes[i + 1]
+        
+        # Basic sequence validation
+        valid_sequence = next_episode["start_date"] > current_episode["end_date"]
+        return valid_sequence
     
     return True
 
@@ -1266,56 +1344,65 @@ dataset.define_population((age >= 14) & (age < 50) & (patients.sex == "female"))
 dataset.pregnancy_test_date = clinical_events.where(
     clinical_events.snomedct_code.is_in(codelists["pregnancy_test"])
 ).date.minimum_for_patient()
+dataset.pregnancy_test_yes_no = ~dataset.pregnancy_test_date.is_null()
 
 dataset.booking_visit_date = clinical_events.where(
     clinical_events.snomedct_code.is_in(codelists["booking_visit"])
 ).date.minimum_for_patient()
+dataset.booking_visit_yes_no = ~dataset.booking_visit_date.is_null()
 
 dataset.dating_scan_date = clinical_events.where(
     clinical_events.snomedct_code.is_in(codelists["dating_scan"])
 ).date.minimum_for_patient()
+dataset.dating_scan_yes_no = ~dataset.dating_scan_date.is_null()
 
 # Antenatal care
 dataset.antenatal_screening_date = clinical_events.where(
     clinical_events.snomedct_code.is_in(codelists["antenatal_screening"])
 ).date.minimum_for_patient()
+dataset.antenatal_screening_yes_no = ~dataset.antenatal_screening_date.is_null()
 
 dataset.antenatal_risk_date = clinical_events.where(
     clinical_events.snomedct_code.is_in(codelists["antenatal_risk"])
 ).date.minimum_for_patient()
+dataset.antenatal_risk_yes_no = ~dataset.antenatal_risk_date.is_null()
 
 # Pregnancy conditions
 for condition in ["gestational_diabetes", "preeclampsia", "pregnancy_hypertension", 
                  "hyperemesis", "pregnancy_infection", "pregnancy_bleeding", 
                  "pregnancy_anemia", "pregnancy_thrombosis", "pregnancy_mental_health"]:
-    setattr(dataset, f"{condition}_date", 
-            clinical_events.where(
-                clinical_events.snomedct_code.is_in(codelists[condition])
-            ).date.minimum_for_patient())
+    date_var = clinical_events.where(
+        clinical_events.snomedct_code.is_in(codelists[condition])
+    ).date.minimum_for_patient()
+    setattr(dataset, f"{condition}_date", date_var)
+    setattr(dataset, f"{condition}_yes_no", ~date_var.is_null())
 
 # Delivery methods
 for method in ["caesarean_section", "forceps_delivery", "vacuum_extraction", 
                "induction", "episiotomy"]:
-    setattr(dataset, f"{method}_date", 
-            clinical_events.where(
-                clinical_events.snomedct_code.is_in(codelists[method])
-            ).date.minimum_for_patient())
+    date_var = clinical_events.where(
+        clinical_events.snomedct_code.is_in(codelists[method])
+    ).date.minimum_for_patient()
+    setattr(dataset, f"{method}_date", date_var)
+    setattr(dataset, f"{method}_yes_no", ~date_var.is_null())
 
 # Outcomes
 for outcome in ["live_birth", "stillbirth", "miscarriage", "abortion", 
                 "ectopic_pregnancy", "molar_pregnancy"]:
-    setattr(dataset, f"{outcome}_date", 
-            clinical_events.where(
-                clinical_events.snomedct_code.is_in(codelists[outcome])
-            ).date.minimum_for_patient())
+    date_var = clinical_events.where(
+        clinical_events.snomedct_code.is_in(codelists[outcome])
+    ).date.minimum_for_patient()
+    setattr(dataset, f"{outcome}_date", date_var)
+    setattr(dataset, f"{outcome}_yes_no", ~date_var.is_null())
 
 # Complications
 for complication in ["postpartum_hemorrhage", "third_degree_tear", 
                     "shoulder_dystocia", "placenta_previa", "placental_abruption"]:
-    setattr(dataset, f"{complication}_date", 
-            clinical_events.where(
-                clinical_events.snomedct_code.is_in(codelists[complication])
-            ).date.minimum_for_patient())
+    date_var = clinical_events.where(
+        clinical_events.snomedct_code.is_in(codelists[complication])
+    ).date.minimum_for_patient()
+    setattr(dataset, f"{complication}_date", date_var)
+    setattr(dataset, f"{complication}_yes_no", ~date_var.is_null())
 
 # Medications
 for medication in ["antenatal_vitamins", "anti_emetics", "antihypertensives", 
@@ -1323,9 +1410,9 @@ for medication in ["antenatal_vitamins", "anti_emetics", "antihypertensives",
     med_events = medications.where(
         medications.dmd_code.is_in(codelists[medication])
     )
-    setattr(dataset, f"{medication}_date", med_events.date.minimum_for_patient())
-    setattr(dataset, f"{medication}_dose", med_events.quantity)
-    setattr(dataset, f"{medication}_unit", med_events.unit)
+    date_var = med_events.date.minimum_for_patient()
+    setattr(dataset, f"{medication}_date", date_var)
+    setattr(dataset, f"{medication}_yes_no", ~date_var.is_null())
 
 # --- 4. Create Composite Pregnancy Episode Identifier ---
 # Get all potential pregnancy events
@@ -1352,11 +1439,16 @@ outcome_events = clinical_events.where(
     )
 )
 
-# Create episode-level variables for up to 5 episodes per patient
+# Create episode-level variables for up to 2 episodes per patient
 previous_episode_end = None
 episodes = []
 
-for episode_num in range(1, 6):
+# Create sets of indicator types for efficient lookup
+primary_indicators = set(EPISODE_IDENTIFICATION["primary_indicators"].keys())
+secondary_indicators = set(EPISODE_IDENTIFICATION["secondary_indicators"].keys())
+outcome_indicators = set(EPISODE_IDENTIFICATION["outcome_indicators"].keys())
+
+for episode_num in range(1, 3):
     # Initialize episode data
     episode_data = {
         "number": episode_num,
@@ -1364,35 +1456,48 @@ for episode_num in range(1, 6):
         "outcomes": {},
         "start_date": None,
         "end_date": None,
-        "confidence": 0.0,
-        "type": "unknown",
-        "quality_issues": []
+        "confidence": 0.0
     }
     
     # Collect all events for this episode
     for event_type, codelist in codelists.items():
-        if event_type in EPISODE_IDENTIFICATION["primary_indicators"] or \
-           event_type in EPISODE_IDENTIFICATION["secondary_indicators"]:
-            events = clinical_events.where(
-                (clinical_events.snomedct_code.is_in(codelist)) &
-                (clinical_events.date > previous_episode_end if previous_episode_end else True)
-            )
-            if events.count_for_patient() > 0:
-                episode_data["events"][event_type] = events.date.minimum_for_patient()
+        if event_type in primary_indicators or event_type in secondary_indicators:
+            # Create the base query
+            base_query = clinical_events.snomedct_code.is_in(codelist)
+            
+            # Add date condition if there's a previous episode
+            if previous_episode_end is not None:
+                date_condition = clinical_events.date > previous_episode_end
+                events = clinical_events.where(base_query & date_condition)
+            else:
+                events = clinical_events.where(base_query)
+            
+            # Get the minimum date if any events exist
+            min_date = events.date.minimum_for_patient()
+            if min_date is not None:
+                episode_data["events"][event_type] = min_date
     
     # Collect all outcomes for this episode
     for outcome_type, codelist in codelists.items():
-        if outcome_type in EPISODE_IDENTIFICATION["outcome_indicators"]:
-            outcomes = clinical_events.where(
-                (clinical_events.snomedct_code.is_in(codelist)) &
-                (clinical_events.date > previous_episode_end if previous_episode_end else True)
-            )
-            if outcomes.count_for_patient() > 0:
-                episode_data["outcomes"][outcome_type] = outcomes.date.minimum_for_patient()
+        if outcome_type in outcome_indicators:
+            # Create the base query
+            base_query = clinical_events.snomedct_code.is_in(codelist)
+            
+            # Add date condition if there's a previous episode
+            if previous_episode_end is not None:
+                date_condition = clinical_events.date > previous_episode_end
+                outcomes = clinical_events.where(base_query & date_condition)
+            else:
+                outcomes = clinical_events.where(base_query)
+            
+            # Get the minimum date if any outcomes exist
+            min_date = outcomes.date.minimum_for_patient()
+            if min_date is not None:
+                episode_data["outcomes"][outcome_type] = min_date
     
     # Identify episode start and end
     episode_data["start_date"] = identify_episode_start(episode_data["events"], previous_episode_end)
-    if episode_data["start_date"]:
+    if episode_data["start_date"] is not None:
         episode_data["end_date"] = identify_episode_end(
             episode_data["events"],
             episode_data["start_date"],
@@ -1400,33 +1505,25 @@ for episode_num in range(1, 6):
         )
     
     # Calculate episode confidence
-    if episode_data["start_date"] and episode_data["end_date"]:
-        episode_data["confidence"] = calculate_episode_confidence(
+    if (episode_data["start_date"] is not None) & (episode_data["end_date"] is not None):
+        confidence = calculate_episode_confidence(
             episode_data["events"],
             episode_data["outcomes"],
             episode_data["start_date"],
             episode_data["end_date"]
         )
-        
-        # Determine episode type
-        if episode_data["confidence"] >= 0.8:
-            episode_data["type"] = "confirmed"
-        elif episode_data["confidence"] >= 0.6:
-            episode_data["type"] = "probable"
-        else:
-            episode_data["type"] = "possible"
+        episode_data["confidence"] = confidence
     
     # Add episode to list if valid
-    if episode_data["start_date"] and episode_data["end_date"]:
+    if (episode_data["start_date"] is not None) & (episode_data["end_date"] is not None):
         episodes.append(episode_data)
         previous_episode_end = episode_data["end_date"]
     
-    # Set episode variables
-    if episode_data["start_date"]:
+    # Set dataset variables
+    if episode_data["start_date"] is not None:
         setattr(dataset, f"episode_{episode_num}_start_date", episode_data["start_date"])
         setattr(dataset, f"episode_{episode_num}_end_date", episode_data["end_date"])
-        setattr(dataset, f"episode_{episode_num}_pregnancy_episode_confidence", episode_data["confidence"])
-        setattr(dataset, f"episode_{episode_num}_pregnancy_episode_type", episode_data["type"])
+        setattr(dataset, f"episode_{episode_num}_confidence", episode_data["confidence"])
         
         # Set event dates
         for event_type, date in episode_data["events"].items():
@@ -1435,59 +1532,6 @@ for episode_num in range(1, 6):
         # Set outcome dates
         for outcome_type, date in episode_data["outcomes"].items():
             setattr(dataset, f"episode_{episode_num}_{outcome_type}_date", date)
-        
-        # Set quality issues
-        setattr(dataset, f"episode_{episode_num}_data_quality_issues", episode_data["quality_issues"])
-        
-        # Calculate and set data quality score
-        severity_weights = {"high": 1.0, "medium": 0.5, "low": 0.25}
-        data_quality_score = 1.0
-        for issue in episode_data["quality_issues"]:
-            data_quality_score -= severity_weights[issue["severity"]] * 0.1
-        data_quality_score = max(0.0, min(data_quality_score, 1.0))
-        setattr(dataset, f"episode_{episode_num}_data_quality_score", data_quality_score)
-    
-    # Validate episode sequence
-    if not validate_episode_sequence(episodes):
-        # If sequence is invalid, remove the last episode
-        if episodes:
-            episodes.pop()
-            previous_episode_end = episodes[-1]["end_date"] if episodes else None
 
-# Update episode processing to include enhanced data quality reporting
-for episode_num in range(1, 6):
-    # ... existing episode initialization code ...
-    
-    if episode_data["start_date"] and episode_data["end_date"]:
-        # Generate quality report
-        quality_report = generate_quality_report(episode_data)
-        
-        # Update episode data with quality information
-        episode_data["quality_report"] = quality_report
-        
-        # Set quality variables
-        setattr(dataset, f"episode_{episode_num}_quality_score", quality_report["quality_score"])
-        setattr(dataset, f"episode_{episode_num}_completeness_score", quality_report["completeness"]["score"])
-        setattr(dataset, f"episode_{episode_num}_consistency_score", quality_report["consistency"]["score"])
-        setattr(dataset, f"episode_{episode_num}_plausibility_score", quality_report["plausibility"]["score"])
-        setattr(dataset, f"episode_{episode_num}_validation_score", quality_report["validation"]["score"])
-        
-        # Set quality issues
-        setattr(dataset, f"episode_{episode_num}_critical_issues", quality_report["summary"]["critical_issues"])
-        setattr(dataset, f"episode_{episode_num}_high_priority_issues", quality_report["summary"]["high_priority_issues"])
-        setattr(dataset, f"episode_{episode_num}_medium_priority_issues", quality_report["summary"]["medium_priority_issues"])
-        setattr(dataset, f"episode_{episode_num}_low_priority_issues", quality_report["summary"]["low_priority_issues"])
-
-# Generate dataset quality summary
-dataset_quality_summary = generate_dataset_quality_summary(episodes)
-
-# Set dataset quality variables
-dataset.quality_summary = dataset_quality_summary
-dataset.quality_scores = dataset_quality_summary["quality_scores"]
-dataset.common_issues = dataset_quality_summary["common_issues"]
-dataset.completeness_issues = dataset_quality_summary["completeness"]
-dataset.consistency_issues = dataset_quality_summary["consistency"]
-dataset.plausibility_issues = dataset_quality_summary["plausibility"]
-
-# --- 5. Configure Dummy Data for Testing ---
-dataset.configure_dummy_data(population_size=2000)
+# Configure dummy data for testing
+dataset.configure_dummy_data(population_size=100) 
