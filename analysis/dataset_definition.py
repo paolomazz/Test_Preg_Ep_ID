@@ -1427,6 +1427,21 @@ pregnancy_events = clinical_events.where(
     )
 )
 
+# Add variable to indicate if patient had any pregnancy episode
+dataset.had_pregnancy_episode = (
+    ~dataset.pregnancy_test_date.is_null() |
+    ~dataset.booking_visit_date.is_null() |
+    ~dataset.dating_scan_date.is_null() |
+    ~dataset.antenatal_screening_date.is_null() |
+    ~dataset.antenatal_risk_date.is_null() |
+    ~dataset.live_birth_date.is_null() |
+    ~dataset.stillbirth_date.is_null() |
+    ~dataset.miscarriage_date.is_null() |
+    ~dataset.abortion_date.is_null() |
+    ~dataset.ectopic_pregnancy_date.is_null() |
+    ~dataset.molar_pregnancy_date.is_null()
+)
+
 # Get all potential outcomes
 outcome_events = clinical_events.where(
     clinical_events.snomedct_code.is_in(
