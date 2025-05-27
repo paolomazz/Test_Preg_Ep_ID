@@ -1502,17 +1502,23 @@ for episode_num in range(1, 3):
     
     # Set dataset variables
     if episode_data["start_date"] is not None:
-        setattr(dataset, f"episode_{episode_num}_start_date", episode_data["start_date"])
-        setattr(dataset, f"episode_{episode_num}_end_date", episode_data["end_date"])
-        setattr(dataset, f"episode_{episode_num}_confidence", episode_data["confidence"])
+        # Only set episode variables if had_pregnancy_episode is True
+        setattr(dataset, f"episode_{episode_num}_start_date", 
+                episode_data["start_date"].where(dataset.had_pregnancy_episode))
+        setattr(dataset, f"episode_{episode_num}_end_date", 
+                episode_data["end_date"].where(dataset.had_pregnancy_episode))
+        setattr(dataset, f"episode_{episode_num}_confidence", 
+                episode_data["confidence"].where(dataset.had_pregnancy_episode))
         
         # Set event dates
         for event_type, date in episode_data["events"].items():
-            setattr(dataset, f"episode_{episode_num}_{event_type}_date", date)
+            setattr(dataset, f"episode_{episode_num}_{event_type}_date", 
+                    date.where(dataset.had_pregnancy_episode))
         
         # Set outcome dates
         for outcome_type, date in episode_data["outcomes"].items():
-            setattr(dataset, f"episode_{episode_num}_{outcome_type}_date", date)
+            setattr(dataset, f"episode_{episode_num}_{outcome_type}_date", 
+                    date.where(dataset.had_pregnancy_episode))
 
 # Configure dummy data for testing
 dataset.configure_dummy_data(population_size=100) 
