@@ -1,10 +1,6 @@
 from ehrql import create_dataset, codelist_from_csv, minimum_of, maximum_of
 from ehrql.tables.core import patients, clinical_events, medications, practice_registrations
 from datetime import date, timedelta
-import csv
-import io
-import os
-import tempfile
 
 # --- 1. Load Pregnancy-Related Codelists ---
 codelist_files = {
