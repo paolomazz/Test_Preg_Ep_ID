@@ -1,6 +1,9 @@
-from ehrql import create_dataset, codelist_from_csv, minimum_of, maximum_of
+from ehrql import create_dataset, codelist_from_csv, minimum_of, maximum_of, when
 from ehrql.tables.core import patients, clinical_events, medications, practice_registrations
 from datetime import date, timedelta
+
+# Create the dataset
+dataset = create_dataset()
 
 # --- 1. Load Pregnancy-Related Codelists ---
 codelist_files = {
@@ -1299,11 +1302,9 @@ def generate_dataset_quality_summary(episodes):
     return summary
 
 # --- 2. Create Dataset and Define Population ---
-dataset = create_dataset()
-age = patients.age_on("2020-03-31")
-dataset.age = age
+dataset.age = patients.age_on("2020-03-31")
 dataset.sex = patients.sex
-dataset.define_population((age >= 14) & (age < 50) & (patients.sex == "female"))
+dataset.define_population((dataset.age >= 14) & (dataset.age < 50) & (dataset.sex == "female"))
 
 # --- 3. Extract Individual Event Variables ---
 # Early pregnancy events
@@ -1408,117 +1409,88 @@ dataset.had_pregnancy_episode = (
     ~dataset.molar_pregnancy_date.is_null()
 )
 
-# Get all potential outcomes
-outcome_events = clinical_events.where(
-    clinical_events.snomedct_code.is_in(
-        codelists["live_birth"] +
-        codelists["stillbirth"] +
-        codelists["miscarriage"] +
-        codelists["abortion"] +
-        codelists["ectopic_pregnancy"] +
-        codelists["molar_pregnancy"]
-    )
+# Process episodes only for patients who had a pregnancy episode
+previous_episode_end = None
+
+# Process first episode
+# Collect all events for first episode
+first_episode_events = {}
+for event_type, codelist in codelists.items():
+    if event_type in EPISODE_IDENTIFICATION["primary_indicators"].keys() or event_type in EPISODE_IDENTIFICATION["secondary_indicators"].keys():
+        events = clinical_events.where(clinical_events.snomedct_code.is_in(codelist))
+        min_date = events.date.minimum_for_patient()
+        if min_date is not None:
+            first_episode_events[event_type] = min_date
+
+# Collect all outcomes for first episode
+first_episode_outcomes = {}
+for outcome_type, codelist in codelists.items():
+    if outcome_type in EPISODE_IDENTIFICATION["outcome_indicators"].keys():
+        outcomes = clinical_events.where(clinical_events.snomedct_code.is_in(codelist))
+        min_date = outcomes.date.minimum_for_patient()
+        if min_date is not None:
+            first_episode_outcomes[outcome_type] = min_date
+
+# Set first episode variables
+dataset.episode_1_start_date = identify_episode_start(first_episode_events, None)
+dataset.episode_1_end_date = identify_episode_end(first_episode_events, dataset.episode_1_start_date, first_episode_outcomes)
+dataset.episode_1_confidence = calculate_episode_confidence(
+    first_episode_events,
+    first_episode_outcomes,
+    dataset.episode_1_start_date,
+    dataset.episode_1_end_date
 )
 
-# Create episode-level variables for up to 2 episodes per patient
-previous_episode_end = None
-episodes = []
+# Set first episode event dates
+for event_type, date in first_episode_events.items():
+    setattr(dataset, f"episode_1_{event_type}_date", date)
 
-# Create sets of indicator types for efficient lookup
-primary_indicators = set(EPISODE_IDENTIFICATION["primary_indicators"].keys())
-secondary_indicators = set(EPISODE_IDENTIFICATION["secondary_indicators"].keys())
-outcome_indicators = set(EPISODE_IDENTIFICATION["outcome_indicators"].keys())
+# Set first episode outcome dates
+for outcome_type, date in first_episode_outcomes.items():
+    setattr(dataset, f"episode_1_{outcome_type}_date", date)
 
-for episode_num in range(1, 3):
-    # Initialize episode data
-    episode_data = {
-        "number": episode_num,
-        "events": {},
-        "outcomes": {},
-        "start_date": None,
-        "end_date": None,
-        "confidence": 0.0
-    }
-    
-    # Collect all events for this episode
-    for event_type, codelist in codelists.items():
-        if event_type in primary_indicators or event_type in secondary_indicators:
-            # Create the base query
-            base_query = clinical_events.snomedct_code.is_in(codelist)
-            
-            # Add date condition if there's a previous episode
-            if previous_episode_end is not None:
-                date_condition = clinical_events.date > previous_episode_end
-                events = clinical_events.where(base_query & date_condition)
-            else:
-                events = clinical_events.where(base_query)
-            
-            # Get the minimum date if any events exist
-            min_date = events.date.minimum_for_patient()
-            if min_date is not None:
-                episode_data["events"][event_type] = min_date
-    
-    # Collect all outcomes for this episode
-    for outcome_type, codelist in codelists.items():
-        if outcome_type in outcome_indicators:
-            # Create the base query
-            base_query = clinical_events.snomedct_code.is_in(codelist)
-            
-            # Add date condition if there's a previous episode
-            if previous_episode_end is not None:
-                date_condition = clinical_events.date > previous_episode_end
-                outcomes = clinical_events.where(base_query & date_condition)
-            else:
-                outcomes = clinical_events.where(base_query)
-            
-            # Get the minimum date if any outcomes exist
-            min_date = outcomes.date.minimum_for_patient()
-            if min_date is not None:
-                episode_data["outcomes"][outcome_type] = min_date
-    
-    # Identify episode start and end
-    episode_data["start_date"] = identify_episode_start(episode_data["events"], previous_episode_end)
-    if episode_data["start_date"] is not None:
-        episode_data["end_date"] = identify_episode_end(
-            episode_data["events"],
-            episode_data["start_date"],
-            episode_data["outcomes"]
+# Process second episode
+# Collect all events for second episode
+second_episode_events = {}
+for event_type, codelist in codelists.items():
+    if event_type in EPISODE_IDENTIFICATION["primary_indicators"].keys() or event_type in EPISODE_IDENTIFICATION["secondary_indicators"].keys():
+        events = clinical_events.where(
+            clinical_events.snomedct_code.is_in(codelist) &
+            (clinical_events.date > dataset.episode_1_end_date)
         )
-    
-    # Calculate episode confidence
-    if (episode_data["start_date"] is not None) & (episode_data["end_date"] is not None):
-        confidence = calculate_episode_confidence(
-            episode_data["events"],
-            episode_data["outcomes"],
-            episode_data["start_date"],
-            episode_data["end_date"]
+        min_date = events.date.minimum_for_patient()
+        if min_date is not None:
+            second_episode_events[event_type] = min_date
+
+# Collect all outcomes for second episode
+second_episode_outcomes = {}
+for outcome_type, codelist in codelists.items():
+    if outcome_type in EPISODE_IDENTIFICATION["outcome_indicators"].keys():
+        outcomes = clinical_events.where(
+            clinical_events.snomedct_code.is_in(codelist) &
+            (clinical_events.date > dataset.episode_1_end_date)
         )
-        episode_data["confidence"] = confidence
-    
-    # Add episode to list if valid
-    if (episode_data["start_date"] is not None) & (episode_data["end_date"] is not None):
-        episodes.append(episode_data)
-        previous_episode_end = episode_data["end_date"]
-    
-    # Set dataset variables
-    if episode_data["start_date"] is not None:
-        # Only set episode variables if had_pregnancy_episode is True
-        setattr(dataset, f"episode_{episode_num}_start_date", 
-                episode_data["start_date"].where(dataset.had_pregnancy_episode))
-        setattr(dataset, f"episode_{episode_num}_end_date", 
-                episode_data["end_date"].where(dataset.had_pregnancy_episode))
-        setattr(dataset, f"episode_{episode_num}_confidence", 
-                episode_data["confidence"].where(dataset.had_pregnancy_episode))
-        
-        # Set event dates
-        for event_type, date in episode_data["events"].items():
-            setattr(dataset, f"episode_{episode_num}_{event_type}_date", 
-                    date.where(dataset.had_pregnancy_episode))
-        
-        # Set outcome dates
-        for outcome_type, date in episode_data["outcomes"].items():
-            setattr(dataset, f"episode_{episode_num}_{outcome_type}_date", 
-                    date.where(dataset.had_pregnancy_episode))
+        min_date = outcomes.date.minimum_for_patient()
+        if min_date is not None:
+            second_episode_outcomes[outcome_type] = min_date
+
+# Set second episode variables
+dataset.episode_2_start_date = identify_episode_start(second_episode_events, dataset.episode_1_end_date)
+dataset.episode_2_end_date = identify_episode_end(second_episode_events, dataset.episode_2_start_date, second_episode_outcomes)
+dataset.episode_2_confidence = calculate_episode_confidence(
+    second_episode_events,
+    second_episode_outcomes,
+    dataset.episode_2_start_date,
+    dataset.episode_2_end_date
+)
+
+# Set second episode event dates
+for event_type, date in second_episode_events.items():
+    setattr(dataset, f"episode_2_{event_type}_date", date)
+
+# Set second episode outcome dates
+for outcome_type, date in second_episode_outcomes.items():
+    setattr(dataset, f"episode_2_{outcome_type}_date", date)
 
 # Configure dummy data for testing
 dataset.configure_dummy_data(population_size=100) 
