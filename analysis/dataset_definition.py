@@ -683,6 +683,10 @@ def identify_episode_end(events, start_date, outcomes):
 
 def calculate_episode_confidence(events, outcomes, start_date, end_date):
     """Calculate confidence score for episode identification."""
+    # Return 0 if no events or outcomes
+    if not events and not outcomes:
+        return 0.0
+    
     # Initialize confidence as a series
     confidence = 0.0
     max_possible_confidence = 0.0
@@ -1354,17 +1358,45 @@ pregnancy_events = clinical_events.where(
 
 # Add variable to indicate if patient had any pregnancy episode
 dataset.had_pregnancy_episode = (
+    # Core pregnancy identification events
     ~dataset.pregnancy_test_date.is_null() |
     ~dataset.booking_visit_date.is_null() |
     ~dataset.dating_scan_date.is_null() |
     ~dataset.antenatal_screening_date.is_null() |
     ~dataset.antenatal_risk_date.is_null() |
+    
+    # Pregnancy outcomes
     ~dataset.live_birth_date.is_null() |
     ~dataset.stillbirth_date.is_null() |
     ~dataset.miscarriage_date.is_null() |
     ~dataset.abortion_date.is_null() |
     ~dataset.ectopic_pregnancy_date.is_null() |
-    ~dataset.molar_pregnancy_date.is_null()
+    ~dataset.molar_pregnancy_date.is_null() |
+    
+    # Pregnancy-specific conditions
+    ~dataset.gestational_diabetes_date.is_null() |
+    ~dataset.preeclampsia_date.is_null() |
+    ~dataset.pregnancy_hypertension_date.is_null() |
+    ~dataset.hyperemesis_date.is_null() |
+    ~dataset.pregnancy_infection_date.is_null() |
+    ~dataset.pregnancy_bleeding_date.is_null() |
+    ~dataset.pregnancy_anemia_date.is_null() |
+    ~dataset.pregnancy_thrombosis_date.is_null() |
+    ~dataset.pregnancy_mental_health_date.is_null() |
+    
+    # Delivery methods
+    ~dataset.caesarean_section_date.is_null() |
+    ~dataset.forceps_delivery_date.is_null() |
+    ~dataset.vacuum_extraction_date.is_null() |
+    ~dataset.induction_date.is_null() |
+    ~dataset.episiotomy_date.is_null() |
+    
+    # Pregnancy-specific complications
+    ~dataset.postpartum_hemorrhage_date.is_null() |
+    ~dataset.third_degree_tear_date.is_null() |
+    ~dataset.shoulder_dystocia_date.is_null() |
+    ~dataset.placenta_previa_date.is_null() |
+    ~dataset.placental_abruption_date.is_null()
 )
 
 # Process episodes only for patients who had a pregnancy episode
