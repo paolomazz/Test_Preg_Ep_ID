@@ -636,6 +636,9 @@ def identify_episode_end(events, start_date, outcomes):
     if not outcomes:
         # If no outcome, use maximum duration
         max_duration = EPISODE_IDENTIFICATION["temporal_rules"]["max_episode_duration"]
+        # Return None if no start date
+        if start_date is None:
+            return None
         # Use date comparison for max end date
         return start_date
     
@@ -1491,4 +1494,6 @@ for outcome_type, date in second_episode_outcomes.items():
     setattr(dataset, f"episode_2_{outcome_type}_date", date)
 
 # Configure dummy data for testing
-dataset.configure_dummy_data(population_size=100) 
+dataset.configure_dummy_data(
+    population_size=100
+) 
