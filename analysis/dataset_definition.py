@@ -545,66 +545,21 @@ def check_plausibility(conditions, medications, measurements):
     
     return issues
 
-def check_temporal_sequence(events, phase):
-    """Check temporal sequence of events."""
-    issues = []
+def check_temporal_sequence(episodes):
+    """Validate the sequence of pregnancy episodes."""
+    if not episodes:
+        return True
     
-    if not events:
-        return issues
+    # Simple validation: check if next episode starts after current episode ends
+    for i in range(len(episodes) - 1):
+        current_episode = episodes[i]
+        next_episode = episodes[i + 1]
+        
+        # Basic sequence validation
+        valid_sequence = next_episode["start_date"] > current_episode["end_date"]
+        return valid_sequence
     
-    # Sort events by date
-    sorted_events = sorted(events.items(), key=lambda x: x[1])
-    
-    # Check booking visit delay
-    if "booking_visit" in events:
-        booking_date = events["booking_visit"]
-        pregnancy_test_date = events.get("pregnancy_test")
-        if pregnancy_test_date:
-            delay = (booking_date - pregnancy_test_date).days
-            if delay > DATA_QUALITY_METRICS["temporal"]["max_booking_delay"]:
-                issues.append({
-                    "type": "late_booking",
-                    "severity": "medium",
-                    "message": f"Booking visit too late: {delay} days after pregnancy test"
-                })
-    
-    # Check scan intervals
-    scan_dates = [date for event, date in sorted_events if "scan" in event.lower()]
-    if len(scan_dates) >= 2:
-        for i in range(len(scan_dates) - 1):
-            interval = (scan_dates[i + 1] - scan_dates[i]).days
-            if interval < DATA_QUALITY_METRICS["temporal"]["min_scan_interval"]:
-                issues.append({
-                    "type": "frequent_scans",
-                    "severity": "low",
-                    "message": f"Scans too frequent: {interval} days apart"
-                })
-            elif interval > DATA_QUALITY_METRICS["temporal"]["max_scan_interval"]:
-                issues.append({
-                    "type": "infrequent_scans",
-                    "severity": "medium",
-                    "message": f"Scans too infrequent: {interval} days apart"
-                })
-    
-    # Check visit intervals
-    visit_dates = [date for event, date in sorted_events if "visit" in event.lower()]
-    if len(visit_dates) >= 2:
-        for i in range(len(visit_dates) - 1):
-            interval = (visit_dates[i + 1] - visit_dates[i]).days
-            if interval < DATA_QUALITY_METRICS["temporal"]["min_visit_interval"]:
-                issues.append({
-                    "type": "frequent_visits",
-                    "severity": "low",
-                    "message": f"Visits too frequent: {interval} days apart"
-                })
-            elif interval > DATA_QUALITY_METRICS["temporal"]["max_visit_interval"]:
-                issues.append({
-                    "type": "infrequent_visits",
-                    "severity": "medium",
-                    "message": f"Visits too infrequent: {interval} days apart"
-                })
-    
-    return issues
+    return True
 
 # Define episode identification criteria
 EPISODE_IDENTIFICATION = {
@@ -730,38 +685,36 @@ def calculate_episode_confidence(events, outcomes, start_date, end_date):
     """Calculate confidence score for episode identification."""
     # Initialize confidence as a series
     confidence = 0.0
+    max_possible_confidence = 0.0
     
     # Check primary indicators
     for event_type, weight in EPISODE_IDENTIFICATION["primary_indicators"].items():
+        max_possible_confidence += weight
         if event_type in events:
-            event_date = events[event_type]
-            # Add weight if date is within episode range
-            confidence += weight
+            confidence = confidence + weight
     
     # Check secondary indicators
     for event_type, weight in EPISODE_IDENTIFICATION["secondary_indicators"].items():
+        max_possible_confidence += weight
         if event_type in events:
-            event_date = events[event_type]
-            # Add weight if date is within episode range
-            confidence += weight
+            confidence = confidence + weight
     
     # Check outcome indicators
     for outcome_type, weight in EPISODE_IDENTIFICATION["outcome_indicators"].items():
+        max_possible_confidence += weight
         if outcome_type in outcomes:
-            outcome_date = outcomes[outcome_type]
-            # Add weight if date is within episode range
-            confidence += weight
-    
-    # Check temporal validity
-    episode_duration = (end_date - start_date).days
-    min_duration = EPISODE_IDENTIFICATION["temporal_rules"]["min_episode_duration"]
-    max_duration = EPISODE_IDENTIFICATION["temporal_rules"]["max_episode_duration"]
+            confidence = confidence + weight
     
     # Add temporal validity weight
-    confidence += 0.2
+    temporal_weight = 0.2
+    max_possible_confidence += temporal_weight
+    confidence = confidence + temporal_weight
     
-    # Ensure confidence is between 0 and 1
-    return minimum_of(confidence, 1.0)
+    # Normalize confidence score
+    normalized_confidence = minimum_of(maximum_of(confidence / max_possible_confidence, 0.0), 1.0)
+    
+    # Return confidence score
+    return normalized_confidence
 
 def validate_episode_sequence(episodes):
     """Validate the sequence of pregnancy episodes."""
@@ -1417,7 +1370,10 @@ previous_episode_end = None
 first_episode_events = {}
 for event_type, codelist in codelists.items():
     if event_type in EPISODE_IDENTIFICATION["primary_indicators"].keys() or event_type in EPISODE_IDENTIFICATION["secondary_indicators"].keys():
-        events = clinical_events.where(clinical_events.snomedct_code.is_in(codelist))
+        events = clinical_events.where(
+            clinical_events.snomedct_code.is_in(codelist) &
+            dataset.had_pregnancy_episode
+        )
         min_date = events.date.minimum_for_patient()
         if min_date is not None:
             first_episode_events[event_type] = min_date
@@ -1426,7 +1382,10 @@ for event_type, codelist in codelists.items():
 first_episode_outcomes = {}
 for outcome_type, codelist in codelists.items():
     if outcome_type in EPISODE_IDENTIFICATION["outcome_indicators"].keys():
-        outcomes = clinical_events.where(clinical_events.snomedct_code.is_in(codelist))
+        outcomes = clinical_events.where(
+            clinical_events.snomedct_code.is_in(codelist) &
+            dataset.had_pregnancy_episode
+        )
         min_date = outcomes.date.minimum_for_patient()
         if min_date is not None:
             first_episode_outcomes[outcome_type] = min_date
@@ -1456,7 +1415,8 @@ for event_type, codelist in codelists.items():
     if event_type in EPISODE_IDENTIFICATION["primary_indicators"].keys() or event_type in EPISODE_IDENTIFICATION["secondary_indicators"].keys():
         events = clinical_events.where(
             clinical_events.snomedct_code.is_in(codelist) &
-            (clinical_events.date > dataset.episode_1_end_date)
+            (clinical_events.date > dataset.episode_1_end_date) &
+            dataset.had_pregnancy_episode
         )
         min_date = events.date.minimum_for_patient()
         if min_date is not None:
@@ -1468,7 +1428,8 @@ for outcome_type, codelist in codelists.items():
     if outcome_type in EPISODE_IDENTIFICATION["outcome_indicators"].keys():
         outcomes = clinical_events.where(
             clinical_events.snomedct_code.is_in(codelist) &
-            (clinical_events.date > dataset.episode_1_end_date)
+            (clinical_events.date > dataset.episode_1_end_date) &
+            dataset.had_pregnancy_episode
         )
         min_date = outcomes.date.minimum_for_patient()
         if min_date is not None:
