@@ -705,10 +705,15 @@ def calculate_episode_confidence(events, outcomes, start_date, end_date):
         if outcome_type in outcomes:
             confidence = confidence + weight
     
-    # Add temporal validity weight
-    temporal_weight = 0.2
-    max_possible_confidence += temporal_weight
-    confidence = confidence + temporal_weight
+    # Only add temporal weight if we have actual indicator events/outcomes
+    if max_possible_confidence > 0:
+        temporal_weight = 0.2
+        max_possible_confidence += temporal_weight
+        confidence = confidence + temporal_weight
+    
+    # If no indicators were found, return 0
+    if max_possible_confidence == 0:
+        return 0.0
     
     # Normalize confidence score
     normalized_confidence = minimum_of(maximum_of(confidence / max_possible_confidence, 0.0), 1.0)
