@@ -686,8 +686,8 @@ def identify_episode_end(events, start_date, outcomes):
 
 def calculate_episode_confidence(events, outcomes, start_date, end_date):
     """Calculate confidence score for episode identification."""
-    # Return 0 if no events or outcomes
-    if not events and not outcomes:
+    # Return 0 if no events or outcomes, or if start_date is None
+    if not events and not outcomes or start_date is None:
         return 0.0
     
     # Initialize confidence as a series
