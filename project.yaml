@@ -6,3 +6,21 @@ actions:
     outputs:
       highly_sensitive:
         dataset: output/dataset.csv.gz
+
+  run_analysis:
+    run: r:latest analysis/pregnancy_analysis.R
+    needs: [generate_dataset]
+    inputs:
+      dataset: output/dataset.csv.gz
+    outputs:
+      highly_sensitive:
+        analysis_results: output/analysis_results.rds
+
+  generate_report:
+    run: r:latest -e "rmarkdown::render('analysis/analysis_report.Rmd', output_file='output/analysis_report.html')"
+    needs: [run_analysis]
+    inputs:
+      analysis_results: output/analysis_results.rds
+    outputs:
+      highly_sensitive:
+        report: output/analysis_report.html
