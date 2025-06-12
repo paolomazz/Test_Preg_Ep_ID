@@ -1,0 +1,84 @@
+---
+title: "Pregnancy Episode Analysis Report"
+author: "Your Name"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    theme: united
+    highlight: tango
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+library(tidyverse)
+library(ggplot2)
+library(kableExtra)
+```
+
+# Introduction
+
+This report presents the analysis of pregnancy episodes identified from the dataset. The analysis includes:
+- Complex episode identification
+- Validation of episodes
+- Confidence scoring
+- Quality control assessment
+
+# Data Overview
+
+```{r data_overview}
+# Load results
+results <- readRDS("analysis_results.rds")
+
+# Display summary statistics
+kable(results$quality_report$summary_stats, 
+      caption = "Summary Statistics") %>%
+  kable_styling(bootstrap_options = c("striped", "hover"))
+```
+
+# Episode Distribution
+
+```{r episode_distribution}
+# Display episode date distribution plot
+results$quality_report$plots[[1]]
+```
+
+# Confidence Score Distribution
+
+```{r confidence_distribution}
+# Display confidence score distribution plot
+results$quality_report$plots[[2]]
+```
+
+# Validation Results
+
+```{r validation_results}
+# Display validation results
+kable(results$validation_results, 
+      caption = "Episode Validation Results") %>%
+  kable_styling(bootstrap_options = c("striped", "hover"))
+```
+
+# Confidence Scores
+
+```{r confidence_scores}
+# Display confidence scores
+kable(results$confidence_scores, 
+      caption = "Episode Confidence Scores") %>%
+  kable_styling(bootstrap_options = c("striped", "hover"))
+```
+
+# Quality Control Assessment
+
+```{r quality_assessment}
+# Add quality control assessment here
+# This section will be populated based on the quality control results
+```
+
+# Conclusions
+
+```{r conclusions}
+# Add conclusions here
+# This section will be populated based on the analysis results
+``` 
