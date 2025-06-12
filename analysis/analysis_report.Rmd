@@ -11,74 +11,108 @@ output:
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE)
 library(tidyverse)
-library(ggplot2)
+library(knitr)
 library(kableExtra)
+library(here)
+
+# Set working directory to workspace root
+setwd(here::here())
 ```
 
 # Introduction
 
-This report presents the analysis of pregnancy episodes identified from the dataset. The analysis includes:
-- Complex episode identification
-- Validation of episodes
-- Confidence scoring
-- Quality control assessment
+This report presents the analysis of pregnancy episodes identified from the dataset.
 
 # Data Overview
 
-```{r data_overview}
-# Load results
-results <- readRDS("analysis_results.rds")
+```{r load-data}
+# Load the analysis results
+results <- readRDS(here::here("output", "analysis_results.rds"))
+
+# Convert to a more readable format
+episodes_summary <- results %>%
+  unnest(cols = c(start_date, end_date)) %>%
+  mutate(
+    duration = as.numeric(difftime(end_date, start_date, units = "days")),
+    duration_weeks = round(duration / 7, 1)
+  )
+```
+
+## Summary Statistics
+
+```{r summary-stats}
+# Calculate summary statistics
+summary_stats <- episodes_summary %>%
+  summarise(
+    n_episodes = n(),
+    mean_duration = mean(duration_weeks, na.rm = TRUE),
+    median_duration = median(duration_weeks, na.rm = TRUE),
+    min_duration = min(duration_weeks, na.rm = TRUE),
+    max_duration = max(duration_weeks, na.rm = TRUE)
+  )
 
 # Display summary statistics
-kable(results$quality_report$summary_stats, 
-      caption = "Summary Statistics") %>%
+kable(summary_stats, 
+      caption = "Summary of Pregnancy Episodes",
+      digits = 1) %>%
   kable_styling(bootstrap_options = c("striped", "hover"))
 ```
 
-# Episode Distribution
+## Duration Distribution
 
-```{r episode_distribution}
-# Display episode date distribution plot
-results$quality_report$plots[[1]]
-```
-
-# Confidence Score Distribution
-
-```{r confidence_distribution}
-# Display confidence score distribution plot
-results$quality_report$plots[[2]]
+```{r duration-plot}
+# Create histogram of episode durations
+ggplot(episodes_summary, aes(x = duration_weeks)) +
+  geom_histogram(binwidth = 1, fill = "steelblue", color = "white") +
+  labs(
+    title = "Distribution of Pregnancy Episode Durations",
+    x = "Duration (weeks)",
+    y = "Count"
+  ) +
+  theme_minimal()
 ```
 
 # Validation Results
 
-```{r validation_results}
-# Display validation results
-kable(results$validation_results, 
-      caption = "Episode Validation Results") %>%
+```{r validation-results}
+# Extract and summarize validation results
+validation_summary <- results %>%
+  select(patient_id, validation_results) %>%
+  unnest(validation_results) %>%
+  mutate(
+    has_temporal_issues = map_lgl(temporal, ~length(.) > 0),
+    has_clinical_issues = map_lgl(clinical, ~length(.) > 0),
+    has_outcome_issues = map_lgl(outcome, ~length(.) > 0)
+  ) %>%
+  group_by(patient_id) %>%
+  summarise(
+    has_temporal_issues = any(has_temporal_issues),
+    has_clinical_issues = any(has_clinical_issues),
+    has_outcome_issues = any(has_outcome_issues)
+  )
+
+# Calculate validation statistics
+validation_stats <- validation_summary %>%
+  summarise(
+    n_patients = n(),
+    n_temporal_issues = sum(has_temporal_issues),
+    n_clinical_issues = sum(has_clinical_issues),
+    n_outcome_issues = sum(has_outcome_issues)
+  )
+
+# Display validation statistics
+kable(validation_stats,
+      caption = "Validation Results Summary") %>%
   kable_styling(bootstrap_options = c("striped", "hover"))
 ```
 
-# Confidence Scores
+# Conclusion
 
-```{r confidence_scores}
-# Display confidence scores
-kable(results$confidence_scores, 
-      caption = "Episode Confidence Scores") %>%
-  kable_styling(bootstrap_options = c("striped", "hover"))
-```
+This analysis has identified and validated pregnancy episodes from the dataset. The results show the distribution of episode durations and highlight any potential issues identified during validation.
 
-# Quality Control Assessment
-
-```{r quality_assessment}
-# Add quality control assessment here
-# This section will be populated based on the quality control results
-```
-
-# Conclusions
-
-```{r conclusions}
-# Add conclusions here
-# This section will be populated based on the analysis results
-``` 
+Key findings:
+- Total number of episodes: `r summary_stats$n_episodes`
+- Mean episode duration: `r round(summary_stats$mean_duration, 1)` weeks
+- Number of episodes with validation issues: `r sum(validation_stats$n_temporal_issues + validation_stats$n_clinical_issues + validation_stats$n_outcome_issues)` 
